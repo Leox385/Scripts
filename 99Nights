@@ -1,0 +1,455 @@
+local Non = loadstring(game:HttpGet("https://raw.githubusercontent.com/neaxusxgod-png/NonUI/main/NonUI.lua"))() or NonUI or _G.NonUI
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local lp = Players.LocalPlayer
+local itemsFolder = Workspace:FindFirstChild("Items")
+local startDrag = ReplicatedStorage.RemoteEvents:FindFirstChild("RequestStartDraggingItem")
+local stopDrag = ReplicatedStorage.RemoteEvents:FindFirstChild("StopDraggingItem")
+local openChestRemote = ReplicatedStorage.RemoteEvents:FindFirstChild("RequestOpenItemChest")
+
+local CAMPFIRE_POS = Vector3.new(0, 2.0, 0)
+local CRAFTING_POS = Vector3.new(19.9, 2.5, -3.2)
+
+local woodDestination = "Around Player"
+local itemsDestination = "Around Player"
+local autoFeedCampfire = false
+
+local playerCircleRadius = 3.2
+local ignoreNearItems = true
+local ignoreDistance = 6
+local scanRadius = 2500
+local selectedItemName = ""
+
+local function Notify(title, msg, icon)
+    pcall(function()
+        Non:Notify({ Title = title, Content = msg, Icon = icon or "circlecheck", Duration = 3.5 })
+    end)
+end
+
+local function GetDestinationCenter(destType)
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if destType == "At Campfire" then
+        return CAMPFIRE_POS
+    elseif destType == "At Crafting Table" then
+        return CRAFTING_POS
+    else
+        return root and root.Position or Vector3.new(0, 0, 0)
+    end
+end
+
+local function GetItemWorldPos(item)
+    local p = item.PrimaryPart or item:FindFirstChild("Main") or item:FindFirstChild("HumanoidRootPart")
+    if p and (p.ClassName == "Part" or p.ClassName == "MeshPart") then
+        return p.Position
+    end
+    for _, d in ipairs(item:GetDescendants()) do
+        if d.ClassName == "MeshPart" or d.ClassName == "Part" or d.ClassName == "UnionOperation" then
+            return d.Position
+        end
+    end
+    return nil
+end
+
+local function GetTargetPosition(destType, count)
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local idx = count or 1
+
+    if destType == "At Campfire" then
+        local ring = math.floor((idx - 1) / 10)
+        local posInRing = (idx - 1) % 10
+        local radius = 4.5 + (ring * 1.5)
+        local angle = (posInRing / 10) * (math.pi * 2)
+        return CAMPFIRE_POS + Vector3.new(math.cos(angle) * radius, 0.2, math.sin(angle) * radius)
+    elseif destType == "At Crafting Table" then
+        local ring = math.floor((idx - 1) / 8)
+        local posInRing = (idx - 1) % 8
+        local radius = 3.5 + (ring * 1.2)
+        local angle = (posInRing / 8) * (math.pi * 2)
+        return CRAFTING_POS + Vector3.new(math.cos(angle) * radius, 0.2, math.sin(angle) * radius)
+    else
+        local pPos = root and root.Position or Vector3.new(0, 4, 0)
+        local ring = math.floor((idx - 1) / 8)
+        local posInRing = (idx - 1) % 8
+        local radius = playerCircleRadius + (ring * 1.1)
+        local angle = (posInRing / 8) * (math.pi * 2) + (ring * 0.4)
+        return pPos + Vector3.new(math.cos(angle) * radius, -1.8, math.sin(angle) * radius)
+    end
+end
+
+local function MoveAllItemParts(item, targetPos)
+    local isCoin = item.Name:find("Coin") or item:GetAttribute("Interaction") == "Currency"
+    local moved = false
+
+    for _, p in ipairs(item:GetDescendants()) do
+        if p.ClassName == "MeshPart" or p.ClassName == "Part" or p.ClassName == "UnionOperation" then
+            p.Position = targetPos
+            moved = true
+        end
+    end
+
+    if not isCoin and startDrag and stopDrag then
+        startDrag:FireServer(item)
+        stopDrag:FireServer(item)
+    end
+    return moved
+end
+
+local function SafeBatchTeleport(rawList, destType, label)
+    task.spawn(function()
+        local destCenter = GetDestinationCenter(destType)
+        local itemsToMove = {}
+        local skippedNear = 0
+
+        for _, item in ipairs(rawList) do
+            if ignoreNearItems then
+                local pos = GetItemWorldPos(item)
+                if pos and (pos - destCenter).Magnitude <= ignoreDistance then
+                    skippedNear = skippedNear + 1
+                else
+                    table.insert(itemsToMove, item)
+                end
+            else
+                table.insert(itemsToMove, item)
+            end
+        end
+
+        local total = #itemsToMove
+        if total == 0 then
+            Notify("Magnet", "All " .. (label or "items") .. " are already at your position.", "circlecheck")
+            return
+        end
+
+        Notify("Attracting", "Bringing " .. total .. " " .. (label or "items") .. "...", "zap")
+
+        local count = 0
+        for i, item in ipairs(itemsToMove) do
+            count = count + 1
+            local targetPos = GetTargetPosition(destType, count)
+            MoveAllItemParts(item, targetPos)
+
+            if count % 7 == 0 then
+                task.wait(0.02)
+            end
+        end
+
+        Notify("Completed", "Brought " .. count .. " " .. (label or "items") .. " in a compact circle.", "circlecheck")
+    end)
+end
+
+local function ScanNearbyItemsList()
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local pPos = root and root.Position or Vector3.new(0, 0, 0)
+
+    local counts = {}
+    if itemsFolder then
+        for _, it in ipairs(itemsFolder:GetChildren()) do
+            local pos = GetItemWorldPos(it)
+            if pos and (pos - pPos).Magnitude <= scanRadius then
+                counts[it.Name] = (counts[it.Name] or 0) + 1
+            end
+        end
+    end
+
+    local list = {}
+    for name, count in pairs(counts) do
+        table.insert(list, name .. " (" .. count .. ")")
+    end
+    table.sort(list)
+
+    if #list == 0 then
+        table.insert(list, "No items in range")
+    end
+    return list
+end
+
+local function IsFuelItem(item)
+    if item:GetAttribute("BurnFuel") ~= nil then return true end
+    local n = item.Name:lower()
+    return n:find("fuel") or n:find("oil") or n:find("barrel") or n:find("canister") or n:find("coal") or n:find("log") or n:find("wood")
+end
+
+local Window = Non:CreateWindow({
+    Title = "99 Nights RealOrCakeHub",
+    Folder = "99 Nights RealOrCakeHub",
+    Theme = "Dark",
+    Size = { 660, 540 },
+    OpenButton = { Title = "99 Nights", Draggable = true }
+})
+
+local MainSection = Window:Section({ Title = "Automation" })
+
+local WoodTab = MainSection:Tab({ Title = "Wood & Fire", Icon = "flame" })
+
+WoodTab:Section("Wood Destination")
+WoodTab:Dropdown({
+    Title = "Where to send logs",
+    Values = { "Around Player", "At Campfire", "At Crafting Table" },
+    Default = "Around Player",
+    Callback = function(v) woodDestination = v end
+})
+
+WoodTab:Button({
+    Title = "Bring All Loose Wood",
+    Desc = "Attracts all logs on the map into a compact circle at your destination",
+    Icon = "download",
+    Callback = function()
+        if not itemsFolder then return end
+        local logs = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            if item.Name == "Log" then
+                table.insert(logs, item)
+            end
+        end
+        SafeBatchTeleport(logs, woodDestination, "logs")
+    end
+})
+
+WoodTab:Section("Fuel Management")
+WoodTab:Button({
+    Title = "Send All Fuel to Campfire",
+    Desc = "Moves oil barrels, canisters, coal, and wood straight into the fire",
+    Icon = "flame",
+    Callback = function()
+        if not itemsFolder then return end
+        task.spawn(function()
+            local count = 0
+            for _, item in ipairs(itemsFolder:GetChildren()) do
+                if IsFuelItem(item) then
+                    count = count + 1
+                    MoveAllItemParts(item, CAMPFIRE_POS + Vector3.new(0, 1.5, 0))
+                    task.wait(0.08)
+                end
+            end
+            Notify("Fuel", "Sent " .. count .. " fuels to the campfire.", "flame")
+        end)
+    end
+})
+
+WoodTab:Toggle({
+    Title = "Auto-Feed Campfire Loop",
+    Desc = "Automatically burns any new fuel dropped on the ground",
+    Default = false,
+    Callback = function(on)
+        autoFeedCampfire = on
+        if on then
+            task.spawn(function()
+                while autoFeedCampfire do
+                    if itemsFolder then
+                        for _, item in ipairs(itemsFolder:GetChildren()) do
+                            if not autoFeedCampfire then break end
+                            if IsFuelItem(item) then
+                                MoveAllItemParts(item, CAMPFIRE_POS + Vector3.new(0, 1.5, 0))
+                                task.wait(0.12)
+                            end
+                        end
+                    end
+                    task.wait(2)
+                end
+            end)
+            Notify("Campfire", "Auto-feed enabled.", "flame")
+        end
+    end
+})
+
+local MagnetTab = MainSection:Tab({ Title = "Item Magnet", Icon = "list" })
+
+MagnetTab:Section("Destination & Circle Size")
+MagnetTab:Dropdown({
+    Title = "Where to send items",
+    Values = { "Around Player", "At Campfire", "At Crafting Table" },
+    Default = "Around Player",
+    Callback = function(v) itemsDestination = v end
+})
+
+MagnetTab:Slider({
+    Title = "Circle Radius (Around You)",
+    Min = 2,
+    Max = 10,
+    Default = 3,
+    Step = 1,
+    Suffix = " studs",
+    Callback = function(v) playerCircleRadius = v end
+})
+
+MagnetTab:Section("Map Items List")
+local itemsDropdown = MagnetTab:Dropdown({
+    Title = "Select Item",
+    Values = ScanNearbyItemsList(),
+    Default = ScanNearbyItemsList()[1] or "",
+    Callback = function(v) selectedItemName = v end
+})
+
+MagnetTab:Button({
+    Title = "Refresh Item List",
+    Desc = "Scans the map and updates available items with current quantities",
+    Icon = "refreshcw",
+    Callback = function()
+        local newList = ScanNearbyItemsList()
+        pcall(function()
+            itemsDropdown:Refresh(newList)
+        end)
+        Notify("List Updated", "Found " .. #newList .. " item types on the map.", "circlecheck")
+    end
+})
+
+MagnetTab:Slider({
+    Title = "List Scan Radius",
+    Min = 200,
+    Max = 3500,
+    Default = 2500,
+    Step = 100,
+    Suffix = " studs",
+    Callback = function(v) scanRadius = v end
+})
+
+MagnetTab:Button({
+    Title = "Attract Selected Item",
+    Desc = "Brings all instances of the selected item in a compact circle at your feet",
+    Icon = "target",
+    Callback = function()
+        if not itemsFolder or selectedItemName == "" or selectedItemName:find("No items") then
+            Notify("Error", "Please select a valid item from the list first.", "trianglealert")
+            return
+        end
+
+        local cleanName = selectedItemName:gsub("%s*%([%d]+%)%s*$", "")
+        local selectedList = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            if item.Name == cleanName then
+                table.insert(selectedList, item)
+            end
+        end
+        SafeBatchTeleport(selectedList, itemsDestination, cleanName)
+    end
+})
+
+MagnetTab:Section("Filter & Mass Actions")
+MagnetTab:Toggle({
+    Title = "Ignore Already Near Items",
+    Desc = "Avoids re-moving items already near your feet",
+    Default = true,
+    Callback = function(on) ignoreNearItems = on end
+})
+
+MagnetTab:Slider({
+    Title = "Ignore Zone Radius",
+    Min = 2,
+    Max = 25,
+    Default = 6,
+    Step = 1,
+    Suffix = " studs",
+    Callback = function(v) ignoreDistance = v end
+})
+
+MagnetTab:Button({
+    Title = "Bring ALL Ground Items",
+    Desc = "Bring all loose resources directly to your feet",
+    Icon = "zap",
+    Callback = function()
+        if not itemsFolder then return end
+        local allItems = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            local isContainer = item.Name:find("Chest") or item.Name:find("Lunchbox")
+            if not isContainer then
+                table.insert(allItems, item)
+            end
+        end
+        SafeBatchTeleport(allItems, itemsDestination, "items")
+    end
+})
+
+MagnetTab:Button({
+    Title = "Force Bring All Money & Sacks",
+    Desc = "Brings all sacks and coin stacks to your feet",
+    Icon = "star",
+    Callback = function()
+        if not itemsFolder then return end
+        local money = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            local n = item.Name:lower()
+            local isCurrency = item:GetAttribute("Interaction") == "Currency" or n:find("coin") or n:find("sack") or n:find("bag") or n:find("cash")
+            if isCurrency then
+                table.insert(money, item)
+            end
+        end
+        SafeBatchTeleport(money, itemsDestination, "money stacks")
+    end
+})
+
+MagnetTab:Button({
+    Title = "Open All Chests",
+    Desc = "Opens all chests across the map to drop their loot on the ground",
+    Icon = "key",
+    Callback = function()
+        if not itemsFolder or not openChestRemote then return end
+        task.spawn(function()
+            local count = 0
+            for _, it in ipairs(itemsFolder:GetChildren()) do
+                if (it.Name:find("Chest") or it.Name:find("Lunchbox")) and not it:GetAttribute("LocalOpened") then
+                    it:SetAttribute("LocalOpened", true)
+                    count = count + 1
+                    openChestRemote:FireServer(it)
+                    task.wait(0.04)
+                end
+            end
+            Notify("Chests", "Opened " .. count .. " chests.", "circlecheck")
+        end)
+    end
+})
+
+MagnetTab:Button({
+    Title = "Bring Chest Loot Only",
+    Desc = "Attracts diamonds, weapons, ammo, and supplies dropped by chests",
+    Icon = "download",
+    Callback = function()
+        if not itemsFolder then return end
+        local loot = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            local isContainer = item.Name:find("Chest") or item.Name:find("Lunchbox")
+            if not isContainer and item.Name ~= "Log" then
+                table.insert(loot, item)
+            end
+        end
+        SafeBatchTeleport(loot, itemsDestination, "loot items")
+    end
+})
+
+MagnetTab:Button({
+    Title = "Bring Scrap & Parts",
+    Desc = "Engines, fans, microwaves, metal, bolts to the ground",
+    Icon = "settings",
+    Callback = function()
+        local junk = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            local n = item.Name:lower()
+            if n:find("fan") or n:find("microwave") or n:find("radio") or n:find("engine") or n:find("iron") or n:find("bolt") or n:find("metal") or n:find("tyre") or n:find("washing") then
+                table.insert(junk, item)
+            end
+        end
+        SafeBatchTeleport(junk, itemsDestination, "scrap parts")
+    end
+})
+
+MagnetTab:Button({
+    Title = "Bring Food & Medicine",
+    Desc = "Berries, meat, carrots, bandages, and cakes to the ground",
+    Icon = "heart",
+    Callback = function()
+        local food = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            local n = item.Name:lower()
+            if n:find("berry") or n:find("cake") or n:find("carrot") or n:find("steak") or n:find("ribs") or n:find("bandage") or n:find("morsel") or n:find("foot") then
+                table.insert(food, item)
+            end
+        end
+        SafeBatchTeleport(food, itemsDestination, "supplies")
+    end
+})
+
+Notify("99 Nights Hub", "Loaded successfully.", "circlecheck")
