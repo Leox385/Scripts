@@ -1,0 +1,1304 @@
+local Non = loadstring(game:HttpGet("https://raw.githubusercontent.com/neaxusxgod-png/NonUI/main/NonUI.lua"))() or NonUI or _G.NonUI
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+
+local lp = Players.LocalPlayer
+local itemsFolder = Workspace:FindFirstChild("Items")
+local remoteEvents = ReplicatedStorage:FindFirstChild("RemoteEvents")
+local startDrag = remoteEvents and remoteEvents:FindFirstChild("RequestStartDraggingItem")
+local stopDrag = remoteEvents and remoteEvents:FindFirstChild("StopDraggingItem")
+local openChestRemote = remoteEvents and remoteEvents:FindFirstChild("RequestOpenItemChest")
+local damageRemote = remoteEvents and remoteEvents:FindFirstChild("ToolDamageObject")
+
+local CAMPFIRE_POS = Vector3.new(0, 2.0, 0)
+local CRAFTING_POS = Vector3.new(19.9, 2.5, -3.2)
+local NOTICE_BOARD_POS = Vector3.new(-1.7, 4.0, 19.5)
+local TRADER_POS = Vector3.new(-18.5, 4.0, 12.0)
+
+local DINO_KID_POS = Vector3.new(-116.5, 3.5, 342.1)
+local KOALA_KID_POS = Vector3.new(225.4, 4.2, -180.8)
+local KRAKEN_KID_POS = Vector3.new(-340.2, 5.0, -115.6)
+local SQUID_KID_POS = Vector3.new(110.8, 4.5, 290.3)
+
+local woodDestination = "Around Player"
+local itemsDestination = "Around Player"
+local playerCircleRadius = 3.2
+local ignoreNearItems = false
+local ignoreDistance = 6
+local scanRadius = 2500
+local selectedItemName = ""
+
+local autoFeedCampfire = false
+
+local autoChopEnabled = false
+local chopTreeType = "All Trees"
+local chopRadius = 500
+local chopSession = 0
+
+local autoHuntEnabled = false
+local huntRadius = 800
+local huntHoverHeight = 8.5
+local huntHitboxSize = 22
+local expandHitboxEnabled = false
+local huntSession = 0
+
+local savedWaypointPos = nil
+local afkSkyHaven = false
+local afkFeedCampfire = false
+local afkAntiIdle = false
+local afkSession = 0
+local savedGroundPos = nil
+
+local function Notify(title, msg, icon)
+    pcall(function()
+        Non:Notify({ Title = title, Content = msg, Icon = icon or "circlecheck", Duration = 3.5 })
+    end)
+end
+
+local function GetDestinationCenter(destType)
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if destType == "At Campfire" then
+        return CAMPFIRE_POS
+    elseif destType == "At Crafting Table" then
+        return CRAFTING_POS
+    else
+        return root and root.Position or Vector3.new(0, 0, 0)
+    end
+end
+
+local function GetItemWorldPos(item)
+    if not item or not item.Parent then return nil end
+    local p = item.PrimaryPart or item:FindFirstChild("Main") or item:FindFirstChild("HumanoidRootPart")
+    if p and p:IsA("BasePart") then
+        return p.Position
+    end
+    local bp = item:FindFirstChildWhichIsA("BasePart")
+    if bp then
+        return bp.Position
+    end
+    for _, d in ipairs(item:GetDescendants()) do
+        if d:IsA("BasePart") then
+            return d.Position
+        end
+    end
+    return nil
+end
+
+local function GetTargetPosition(destType, count)
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local idx = count or 1
+
+    if destType == "At Campfire" then
+        local ring = math.floor((idx - 1) / 10)
+        local posInRing = (idx - 1) % 10
+        local radius = 4.5 + (ring * 1.5)
+        local angle = (posInRing / 10) * (math.pi * 2)
+        return CAMPFIRE_POS + Vector3.new(math.cos(angle) * radius, 0.2, math.sin(angle) * radius)
+    elseif destType == "At Crafting Table" then
+        local ring = math.floor((idx - 1) / 8)
+        local posInRing = (idx - 1) % 8
+        local radius = 3.5 + (ring * 1.2)
+        local angle = (posInRing / 8) * (math.pi * 2)
+        return CRAFTING_POS + Vector3.new(math.cos(angle) * radius, 0.2, math.sin(angle) * radius)
+    else
+        local pPos = root and root.Position or Vector3.new(0, 4, 0)
+        local ring = math.floor((idx - 1) / 8)
+        local posInRing = (idx - 1) % 8
+        local radius = playerCircleRadius + (ring * 1.1)
+        local angle = (posInRing / 8) * (math.pi * 2) + (ring * 0.4)
+        return pPos + Vector3.new(math.cos(angle) * radius, -1.8, math.sin(angle) * radius)
+    end
+end
+
+local function MoveAllItemParts(item, targetPos)
+    if not item or not item.Parent then return false end
+    local isCoin = item.Name:find("Coin") or item:GetAttribute("Interaction") == "Currency"
+    local moved = false
+
+    for _, p in ipairs(item:GetDescendants()) do
+        if p:IsA("BasePart") then
+            p.Position = targetPos
+            p.AssemblyLinearVelocity = Vector3.zero
+            p.Velocity = Vector3.zero
+            moved = true
+        end
+    end
+
+    if not isCoin and startDrag and stopDrag then
+        pcall(function()
+            startDrag:FireServer(item)
+            stopDrag:FireServer(item)
+        end)
+    end
+    return moved
+end
+
+local function SafeBatchTeleport(rawList, destType, label)
+    task.spawn(function()
+        local destCenter = GetDestinationCenter(destType)
+        local itemsToMove = {}
+
+        for _, item in ipairs(rawList) do
+            if ignoreNearItems then
+                local pos = GetItemWorldPos(item)
+                if pos and (pos - destCenter).Magnitude <= ignoreDistance then
+                    -- already close, skip
+                else
+                    table.insert(itemsToMove, item)
+                end
+            else
+                table.insert(itemsToMove, item)
+            end
+        end
+
+        local total = #itemsToMove
+        if total == 0 then
+            Notify("Magnet", "All " .. (label or "items") .. " are already at destination.", "circlecheck")
+            return
+        end
+
+        Notify("Attracting", "Bringing " .. total .. " " .. (label or "items") .. "...", "zap")
+
+        local count = 0
+        for _, item in ipairs(itemsToMove) do
+            count = count + 1
+            local targetPos = GetTargetPosition(destType, count)
+            MoveAllItemParts(item, targetPos)
+
+            if count % 7 == 0 then
+                task.wait(0.02)
+            end
+        end
+
+        Notify("Completed", "Brought " .. count .. " " .. (label or "items") .. " in a compact circle.", "circlecheck")
+    end)
+end
+
+local function IsFuelItem(item)
+    if item:GetAttribute("BurnFuel") ~= nil then return true end
+    local n = item.Name:lower()
+    return n:find("fuel") or n:find("oil") or n:find("barrel") or n:find("canister") or n:find("coal") or n:find("log") or n:find("wood")
+end
+
+local function ScanNearbyItemsList()
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local pPos = root and root.Position or Vector3.new(0, 0, 0)
+
+    local counts = {}
+    if itemsFolder then
+        for _, it in ipairs(itemsFolder:GetChildren()) do
+            local pos = GetItemWorldPos(it)
+            if pos and (pos - pPos).Magnitude <= scanRadius then
+                counts[it.Name] = (counts[it.Name] or 0) + 1
+            end
+        end
+    end
+
+    local list = {}
+    for name, count in pairs(counts) do
+        table.insert(list, name .. " (" .. count .. ")")
+    end
+    table.sort(list)
+
+    if #list == 0 then
+        table.insert(list, "No items in range")
+    end
+    return list
+end
+
+local function GetAllPlayerTools()
+    local tools = {}
+    local seen = {}
+
+    local function addToolsFrom(container)
+        if not container then return end
+        for _, item in ipairs(container:GetChildren()) do
+            if not seen[item] then
+                seen[item] = true
+                table.insert(tools, item)
+            end
+        end
+    end
+
+    addToolsFrom(lp:FindFirstChild("Inventory"))
+    addToolsFrom(lp:FindFirstChild("ItemBag"))
+    addToolsFrom(lp:FindFirstChild("Backpack"))
+    addToolsFrom(lp.Character)
+
+    return tools
+end
+
+local function GetBestAxe()
+    local allTools = GetAllPlayerTools()
+    local bestAxe = nil
+    local bestDamage = 0
+
+    for _, item in ipairs(allTools) do
+        local n = item.Name:lower()
+        local tName = (item:GetAttribute("ToolName") or ""):lower()
+        local resDmg = item:GetAttribute("WeaponResourceDamage")
+        local wepDmg = item:GetAttribute("WeaponDamage")
+
+        local isAxe = tName:find("axe") ~= nil or tName:find("chainsaw") ~= nil 
+            or n:find("axe") ~= nil or n:find("chainsaw") ~= nil
+
+        if isAxe then
+            local dmg = resDmg or wepDmg or 4
+            if dmg > bestDamage then
+                bestDamage = dmg
+                bestAxe = item
+            end
+        end
+    end
+
+    if not bestAxe then
+        for _, item in ipairs(allTools) do
+            local resDmg = item:GetAttribute("WeaponResourceDamage")
+            if resDmg and resDmg > bestDamage then
+                bestDamage = resDmg
+                bestAxe = item
+            end
+        end
+    end
+
+    return bestAxe, (bestDamage > 0 and bestDamage or 4)
+end
+
+local function GetBestWeapon()
+    local allTools = GetAllPlayerTools()
+    local bestWeapon = nil
+    local bestDamage = 0
+
+    for _, item in ipairs(allTools) do
+        local n = item.Name:lower()
+        local tName = (item:GetAttribute("ToolName") or ""):lower()
+        local wepDmg = item:GetAttribute("WeaponDamage")
+
+        local isWeapon = wepDmg ~= nil 
+            or tName:find("sword") ~= nil or tName:find("spear") ~= nil or tName:find("axe") ~= nil or tName:find("knife") ~= nil or tName:find("blade") ~= nil or tName:find("machete") ~= nil or tName:find("katana") ~= nil
+            or n:find("sword") ~= nil or n:find("spear") ~= nil or n:find("axe") ~= nil or n:find("knife") ~= nil or n:find("blade") ~= nil or n:find("machete") ~= nil or n:find("katana") ~= nil or n:find("dagger") ~= nil or n:find("club") ~= nil or n:find("hammer") ~= nil or n:find("scythe") ~= nil
+
+        if isWeapon then
+            local dmg = wepDmg or item:GetAttribute("WeaponResourceDamage") or 7
+            if dmg > bestDamage then
+                bestDamage = dmg
+                bestWeapon = item
+            end
+        end
+    end
+
+    return bestWeapon, (bestDamage > 0 and bestDamage or 7)
+end
+
+local function EnsureToolEquipped(toolItem)
+    if not toolItem then return false end
+    local char = lp.Character
+    if not char then return false end
+
+    local th = char:FindFirstChild("ToolHandle")
+    local equippedItem = th and th:FindFirstChild("OriginalItem") and th.OriginalItem.Value
+    if equippedItem and (equippedItem == toolItem or equippedItem.Name == toolItem.Name) then
+        return true
+    end
+
+    local pgui = lp:FindFirstChild("PlayerGui")
+    local iface = pgui and pgui:FindFirstChild("Interface")
+    local hotbar = iface and iface:FindFirstChild("Hotbar")
+    local btn = hotbar and hotbar:FindFirstChild("Button" .. toolItem.Name)
+    local slotNum = nil
+    if btn and btn:FindFirstChild("Number") and btn.Number:IsA("TextLabel") then
+        slotNum = tonumber(btn.Number.Text)
+    end
+
+    if slotNum and slotNum >= 1 and slotNum <= 9 and keypress and keyrelease then
+        local key = 48 + slotNum
+        keypress(key)
+        task.wait(0.04)
+        keyrelease(key)
+        task.wait(0.12)
+        return true
+    end
+
+    if keypress and keyrelease then
+        local fallbackKey = toolItem.Name:lower():find("axe") and 50 or 49
+        keypress(fallbackKey)
+        task.wait(0.04)
+        keyrelease(fallbackKey)
+        task.wait(0.12)
+    end
+    return true
+end
+
+local function SafeTeleport(targetPos)
+    local char = lp.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then
+        Notify("Teleport Error", "Character not found.", "trianglealert")
+        return
+    end
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.CFrame = CFrame.new(targetPos.X, targetPos.Y, targetPos.Z)
+    Notify("Teleported", "Moved to destination.", "move")
+end
+
+local function IsTreeMatchingSize(treeModel, selectedType)
+    if selectedType == "All Trees" then return true end
+    local name = treeModel.Name:lower()
+    local isBig = name:find("big") ~= nil
+    local isSmall = name:find("small") ~= nil
+
+    if not isBig and not isSmall then
+        local trunk = treeModel:FindFirstChild("Trunk") or treeModel:FindFirstChild("Wood") or treeModel.PrimaryPart
+        if trunk and trunk:IsA("BasePart") then
+            if trunk.Size.Y >= 25 or trunk.Size.X >= 3.5 then
+                isBig = true
+            else
+                isSmall = true
+            end
+        else
+            isSmall = true
+        end
+    end
+
+    if selectedType == "Small Trees Only" then
+        return isSmall and not isBig
+    elseif selectedType == "Big Trees Only" then
+        return isBig
+    end
+    return true
+end
+
+local function DisarmAndExpandAnimal(targetModel, customSize)
+    if not targetModel or not targetModel.Parent then return end
+    local s = customSize or huntHitboxSize or 22
+    local targetPart = targetModel:FindFirstChild("HumanoidRootPart") or targetModel:FindFirstChild("Torso") or targetModel.PrimaryPart
+    if targetPart and targetPart:IsA("BasePart") then
+        if targetPart.Size.X ~= s or targetPart.CanCollide ~= false then
+            targetPart.Size = Vector3.new(s, s, s)
+            targetPart.CanCollide = false
+        end
+    end
+    for _, p in ipairs(targetModel:GetChildren()) do
+        if p:IsA("BasePart") and p.CanCollide then
+            pcall(function() p.CanCollide = false end)
+        end
+    end
+    if targetModel:GetAttribute("AttackRange") ~= 0 then
+        pcall(function() targetModel:SetAttribute("AttackRange", 0) end)
+    end
+    if targetModel:GetAttribute("ChasingPlayer") ~= 0 then
+        pcall(function() targetModel:SetAttribute("ChasingPlayer", 0) end)
+    end
+    if targetModel:GetAttribute("State") ~= "Idle" then
+        pcall(function() targetModel:SetAttribute("State", "Idle") end)
+    end
+end
+
+local Window = Non:CreateWindow({
+    Title = "99 Nights Hub",
+    Folder = "99NightsHub",
+    Theme = "Dark",
+    Size = { 680, 560 },
+    OpenButton = { Title = "99 Nights", Draggable = true }
+})
+
+task.spawn(function()
+    while true do
+        if expandHitboxEnabled then
+            local char = lp.Character
+            local root = char and char:FindFirstChild("HumanoidRootPart")
+            local pPos = root and root.Position
+            local charsFolder = Workspace:FindFirstChild("Characters") or Workspace:FindFirstChild("Animals") or Workspace:FindFirstChild("Enemies")
+            if charsFolder and pPos then
+                for _, obj in ipairs(charsFolder:GetChildren()) do
+                    if obj:IsA("Model") and obj ~= char then
+                        local aHum = obj:FindFirstChild("NPC") or obj:FindFirstChildOfClass("Humanoid")
+                        local aRoot = obj:FindFirstChild("HumanoidRootPart") or obj.PrimaryPart
+                        if aHum and aHum.Health > 0 and aRoot and (aRoot.Position - pPos).Magnitude <= 500 then
+                            DisarmAndExpandAnimal(obj, huntHitboxSize)
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(1.0)
+    end
+end)
+
+local MainSection = Window:Section({ Title = "Features" })
+
+local FarmTab = MainSection:Tab({ Title = "Auto Farm", Icon = "crosshair" })
+
+FarmTab:Section("Tree Auto-Chop")
+FarmTab:Dropdown({
+    Title = "Tree Type to Chop",
+    Values = { "All Trees", "Small Trees Only", "Big Trees Only" },
+    Default = "All Trees",
+    Callback = function(v) chopTreeType = v end
+})
+
+FarmTab:Slider({
+    Title = "Chop Search Radius",
+    Min = 50,
+    Max = 1500,
+    Default = 500,
+    Step = 50,
+    Suffix = " studs",
+    Callback = function(v) chopRadius = v end
+})
+
+FarmTab:Toggle({
+    Title = "Auto-Chop Trees",
+    Desc = "Automatically cuts down trees using your strongest detected axe",
+    Default = false,
+    Callback = function(on)
+        autoChopEnabled = on
+        chopSession = chopSession + 1
+        local mySession = chopSession
+
+        if on then
+            if autoHuntEnabled then
+                autoHuntEnabled = false
+                huntSession = huntSession + 1
+            end
+
+            local initAxe, initDmg = GetBestAxe()
+            if not initAxe then
+                Notify("Auto-Chop", "No axe found in inventory or character.", "trianglealert")
+                autoChopEnabled = false
+                return
+            end
+
+            Notify("Auto-Chop", string.format("Started auto-chop using %s (Damage: %d).", initAxe.Name, initDmg), "circlecheck")
+
+            task.spawn(function()
+                while autoChopEnabled and mySession == chopSession do
+                    local char = lp.Character
+                    local root = char and char:FindFirstChild("HumanoidRootPart")
+                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+                    if not root or not hum or hum.Health <= 0 then
+                        task.wait(1)
+                        continue
+                    end
+
+                    local axe, axeDamage = GetBestAxe()
+                    if not axe then
+                        Notify("Auto-Chop", "No axe found in inventory or character.", "trianglealert")
+                        autoChopEnabled = false
+                        break
+                    end
+
+                    EnsureToolEquipped(axe)
+
+                    local bestTree = nil
+                    local bestDist = chopRadius
+
+                    local function CheckTree(obj)
+                        if not obj:IsA("Model") then return end
+                        if obj:GetAttribute("LocalDestroyed") or obj:GetAttribute("Dead") then return end
+                        local hp = obj:GetAttribute("Health")
+                        if hp ~= nil and hp <= 0 then return end
+
+                        if obj.Name:lower():find("tree") then
+                            local trunk = obj:FindFirstChild("Trunk") or obj:FindFirstChild("Wood") or obj.PrimaryPart
+                            if trunk and trunk:IsA("BasePart") then
+                                local d = (trunk.Position - root.Position).Magnitude
+                                if d < bestDist and IsTreeMatchingSize(obj, chopTreeType) then
+                                    bestDist = d
+                                    bestTree = obj
+                                end
+                            end
+                        end
+                    end
+
+                    local foliage = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Foliage")
+                    if foliage then
+                        for _, obj in ipairs(foliage:GetChildren()) do CheckTree(obj) end
+                    else
+                        local mapFolder = Workspace:FindFirstChild("Map")
+                        if mapFolder then
+                            for _, obj in ipairs(mapFolder:GetChildren()) do CheckTree(obj) end
+                        end
+                        for _, obj in ipairs(Workspace:GetChildren()) do CheckTree(obj) end
+                    end
+
+                    if not bestTree or not autoChopEnabled or mySession ~= chopSession then
+                        task.wait(0.6)
+                        continue
+                    end
+
+                    local trunk = bestTree:FindFirstChild("Trunk") or bestTree:FindFirstChild("Wood") or bestTree.PrimaryPart
+                    if not trunk then
+                        task.wait(0.3)
+                        continue
+                    end
+
+                    local isBig = bestTree.Name:lower():find("big") ~= nil
+                    local safeDistance = isBig and 4.8 or 3.6
+                    local treePos = trunk.Position
+                    local dir = (root.Position - treePos).Unit
+                    if dir.Magnitude < 0.1 then dir = Vector3.new(1, 0, 0) end
+                    local standPos = Vector3.new(treePos.X, root.Position.Y, treePos.Z) + Vector3.new(dir.X, 0, dir.Z).Unit * safeDistance
+
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.Velocity = Vector3.zero
+                    root.CFrame = CFrame.lookAt(standPos, Vector3.new(treePos.X, standPos.Y, treePos.Z))
+                    task.wait(0.1)
+
+                    local chopTimeout = 0
+                    while autoChopEnabled and mySession == chopSession and bestTree.Parent and trunk.Parent and not bestTree:GetAttribute("LocalDestroyed") and not bestTree:GetAttribute("Dead") and (bestTree:GetAttribute("Health") == nil or bestTree:GetAttribute("Health") > 0) and chopTimeout < 45 do
+                        chopTimeout = chopTimeout + 1
+                        local curChar = lp.Character
+                        local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
+                        local curHum = curChar and curChar:FindFirstChildOfClass("Humanoid")
+                        if not curRoot or not curHum or curHum.Health <= 0 then break end
+
+                        EnsureToolEquipped(axe)
+
+                        curRoot.AssemblyLinearVelocity = Vector3.zero
+                        curRoot.Velocity = Vector3.zero
+                        curRoot.CFrame = CFrame.lookAt(standPos, Vector3.new(treePos.X, standPos.Y, treePos.Z))
+
+                        if mouse1click then
+                            mouse1click()
+                        end
+
+                        if damageRemote then
+                            task.spawn(function()
+                                local hitId = tostring(math.random(1000, 99999)) .. "_" .. math.abs(lp.UserId)
+                                pcall(function()
+                                    damageRemote:InvokeServer(bestTree, axe, hitId, curRoot.CFrame, false)
+                                end)
+                            end)
+                        end
+
+                        task.wait(0.28)
+                    end
+
+                    local curChar = lp.Character
+                    local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
+                    if curRoot then
+                        curRoot.AssemblyLinearVelocity = Vector3.zero
+                        curRoot.Velocity = Vector3.zero
+                    end
+
+                    task.wait(0.25)
+                end
+            end)
+        else
+            Notify("Auto-Chop", "Auto-chop disabled.", "circlecheck")
+        end
+    end
+})
+
+FarmTab:Section("Animal Auto-Hunt")
+FarmTab:Slider({
+    Title = "Hunt Search Radius",
+    Min = 50,
+    Max = 2000,
+    Default = 800,
+    Step = 50,
+    Suffix = " studs",
+    Callback = function(v) huntRadius = v end
+})
+
+FarmTab:Slider({
+    Title = "Safe Hover Height",
+    Min = 6,
+    Max = 16,
+    Default = 8.5,
+    Step = 0.5,
+    Suffix = " studs",
+    Callback = function(v) huntHoverHeight = v end
+})
+
+FarmTab:Slider({
+    Title = "Hitbox Expansion Size",
+    Min = 12,
+    Max = 35,
+    Default = 22,
+    Step = 1,
+    Suffix = " studs",
+    Callback = function(v) huntHitboxSize = v end
+})
+
+FarmTab:Toggle({
+    Title = "Auto-Expand Animal Hitboxes",
+    Desc = "Continuously enlarges hitboxes of all nearby animals making them easy to hit from distance",
+    Default = false,
+    Callback = function(on)
+        expandHitboxEnabled = on
+        if on then
+            Notify("Hitbox Expander", "Nearby animal hitboxes expanded.", "circlecheck")
+        end
+    end
+})
+
+FarmTab:Toggle({
+    Title = "Auto-Hunt Animals",
+    Desc = "Hovers securely above animals avoiding damage with your strongest weapon",
+    Default = false,
+    Callback = function(on)
+        autoHuntEnabled = on
+        huntSession = huntSession + 1
+        local mySession = huntSession
+
+        local char = lp.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+
+        if on then
+            if autoChopEnabled then
+                autoChopEnabled = false
+                chopSession = chopSession + 1
+            end
+
+            if root then
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.Velocity = Vector3.zero
+            end
+
+            local initWep, initDmg = GetBestWeapon()
+            if not initWep then
+                Notify("Auto-Hunt", "No weapon found in inventory or character.", "trianglealert")
+                autoHuntEnabled = false
+                return
+            end
+
+            Notify("Auto-Hunt", string.format("Started auto-hunt using %s (Damage: %d).", initWep.Name, initDmg), "circlecheck")
+
+            task.spawn(function()
+                while autoHuntEnabled and mySession == huntSession do
+                    local curChar = lp.Character
+                    local curRoot = curChar and curChar:FindFirstChild("HumanoidRootPart")
+                    local hum = curChar and curChar:FindFirstChildOfClass("Humanoid")
+                    if not curRoot or not hum or hum.Health <= 0 then
+                        task.wait(0.4)
+                        continue
+                    end
+
+                    local weapon = GetBestWeapon()
+                    if not weapon then
+                        Notify("Auto-Hunt", "No weapon found in inventory or character.", "trianglealert")
+                        autoHuntEnabled = false
+                        break
+                    end
+
+                    local bestAnimal = nil
+                    local bestDist = huntRadius
+
+                    local function CheckAnimal(obj)
+                        if not obj:IsA("Model") or obj == curChar then return end
+                        if obj:GetAttribute("Dead") or obj:GetAttribute("LocalDestroyed") then return end
+                        local aHum = obj:FindFirstChild("NPC") or obj:FindFirstChildOfClass("Humanoid")
+                        if not aHum or aHum.Health <= 0 then return end
+                        local aRoot = obj:FindFirstChild("HumanoidRootPart") or obj:FindFirstChild("Torso") or obj.PrimaryPart
+                        if not aRoot then return end
+
+                        local d = (aRoot.Position - curRoot.Position).Magnitude
+                        if d < bestDist then
+                            local n = obj.Name:lower()
+                            local isTarget = n:find("deer") or n:find("wolf") or n:find("bear") or n:find("fox") or n:find("rabbit") or n:find("bunny") or n:find("boar") or n:find("spider") or n:find("cultist") or n:find("frog") or n:find("animal") or n:find("kiwi") or n:find("scorpion") or n:find("monster")
+                            if isTarget then
+                                bestDist = d
+                                bestAnimal = obj
+                            end
+                        end
+                    end
+
+                    local charsFolder = Workspace:FindFirstChild("Characters") or Workspace:FindFirstChild("Animals") or Workspace:FindFirstChild("Enemies")
+                    if charsFolder then
+                        for _, obj in ipairs(charsFolder:GetChildren()) do CheckAnimal(obj) end
+                    else
+                        for _, obj in ipairs(Workspace:GetChildren()) do CheckAnimal(obj) end
+                    end
+
+                    if not bestAnimal or not autoHuntEnabled or mySession ~= huntSession then
+                        task.wait(0.35)
+                        continue
+                    end
+
+                    local aRoot = bestAnimal:FindFirstChild("HumanoidRootPart") or bestAnimal:FindFirstChild("Torso") or bestAnimal.PrimaryPart
+                    local aHum = bestAnimal:FindFirstChild("NPC") or bestAnimal:FindFirstChildOfClass("Humanoid")
+                    if not aRoot or not aHum then
+                        task.wait(0.2)
+                        continue
+                    end
+
+                    DisarmAndExpandAnimal(bestAnimal, huntHitboxSize)
+
+                    local curAnimalPos = aRoot.Position
+                    local initialHoverPos = curAnimalPos + Vector3.new(0, huntHoverHeight, 0)
+                    curRoot.AssemblyLinearVelocity = Vector3.zero
+                    curRoot.Velocity = Vector3.zero
+                    curRoot.CFrame = CFrame.lookAt(initialHoverPos, curAnimalPos)
+
+                    local isHoveringTarget = true
+                    task.spawn(function()
+                        while autoHuntEnabled and mySession == huntSession and isHoveringTarget and bestAnimal.Parent and aRoot.Parent do
+                            local c = lp.Character
+                            local r = c and c:FindFirstChild("HumanoidRootPart")
+                            if r and aRoot.Parent then
+                                local tPos = aRoot.Position
+                                local safeHoverPos = tPos + Vector3.new(0, huntHoverHeight, 0)
+                                r.AssemblyLinearVelocity = Vector3.zero
+                                r.Velocity = Vector3.zero
+                                r.CFrame = CFrame.lookAt(safeHoverPos, tPos)
+                            end
+                            task.wait()
+                        end
+                    end)
+
+                    local huntTimeout = 0
+                    while autoHuntEnabled and mySession == huntSession and bestAnimal.Parent and aHum.Health > 0 and not bestAnimal:GetAttribute("Dead") and not bestAnimal:GetAttribute("LocalDestroyed") and aRoot.Parent and huntTimeout < 45 do
+                        huntTimeout = huntTimeout + 1
+
+                        EnsureToolEquipped(weapon)
+                        DisarmAndExpandAnimal(bestAnimal, huntHitboxSize)
+
+                        if mouse1click then
+                            mouse1click()
+                        end
+
+                        if damageRemote then
+                            task.spawn(function()
+                                local hitId = tostring(math.random(1000, 99999)) .. "_" .. math.abs(lp.UserId)
+                                pcall(function()
+                                    damageRemote:InvokeServer(bestAnimal, weapon, hitId, curRoot.CFrame, false)
+                                end)
+                            end)
+                        end
+
+                        task.wait(0.24)
+                    end
+
+                    isHoveringTarget = false
+
+                    if curRoot and curRoot.Parent then
+                        curRoot.AssemblyLinearVelocity = Vector3.zero
+                        curRoot.Velocity = Vector3.zero
+                    end
+
+                    task.wait(0.1)
+                end
+            end)
+        else
+            if root then
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.Velocity = Vector3.zero
+            end
+            Notify("Auto-Hunt", "Auto-hunt disabled.", "circlecheck")
+        end
+    end
+})
+
+local WoodTab = MainSection:Tab({ Title = "Wood & Fire", Icon = "flame" })
+
+WoodTab:Section("Wood Destination")
+WoodTab:Dropdown({
+    Title = "Send Wood Destination",
+    Values = { "Around Player", "At Campfire", "At Crafting Table" },
+    Default = "Around Player",
+    Callback = function(v) woodDestination = v end
+})
+
+WoodTab:Section("Wood Gathering")
+WoodTab:Button({
+    Title = "Bring All Loose Wood",
+    Desc = "Attracts all logs on the map forming a neat circle at destination",
+    Icon = "download",
+    Callback = function()
+        if not itemsFolder then return end
+        local logs = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            if item.Name == "Log" then
+                table.insert(logs, item)
+            end
+        end
+        SafeBatchTeleport(logs, woodDestination, "logs")
+    end
+})
+
+WoodTab:Section("Campfire Fuel Management")
+WoodTab:Button({
+    Title = "Send All Fuel to Campfire",
+    Desc = "Moves oil barrels, fuel canisters, coal and wood straight into the campfire",
+    Icon = "flame",
+    Callback = function()
+        if not itemsFolder then return end
+        task.spawn(function()
+            local count = 0
+            for _, item in ipairs(itemsFolder:GetChildren()) do
+                if IsFuelItem(item) then
+                    count = count + 1
+                    MoveAllItemParts(item, CAMPFIRE_POS + Vector3.new(0, 1.5, 0))
+                    task.wait(0.08)
+                end
+            end
+            Notify("Fuel", "Sent " .. count .. " fuel items to the campfire.", "flame")
+        end)
+    end
+})
+
+WoodTab:Toggle({
+    Title = "Auto-Feed Campfire Loop",
+    Desc = "Continuously burns any loose fuel or wood on the ground",
+    Default = false,
+    Callback = function(on)
+        autoFeedCampfire = on
+        if on then
+            task.spawn(function()
+                while autoFeedCampfire do
+                    if itemsFolder then
+                        local fed = 0
+                        for _, item in ipairs(itemsFolder:GetChildren()) do
+                            if not autoFeedCampfire then break end
+                            if IsFuelItem(item) then
+                                local p = GetItemWorldPos(item)
+                                if p and (p - CAMPFIRE_POS).Magnitude > 4.5 then
+                                    MoveAllItemParts(item, CAMPFIRE_POS + Vector3.new(0, 1.2, 0))
+                                    fed = fed + 1
+                                    task.wait(0.08)
+                                    if fed >= 10 then break end
+                                end
+                            end
+                        end
+                    end
+                    task.wait(2.5)
+                end
+            end)
+            Notify("Campfire", "Campfire auto-feeding enabled.", "flame")
+        end
+    end
+})
+
+local MagnetTab = MainSection:Tab({ Title = "Item Magnet", Icon = "list" })
+
+MagnetTab:Section("Destination and Circle Layout")
+MagnetTab:Dropdown({
+    Title = "Send Items Destination",
+    Values = { "Around Player", "At Campfire", "At Crafting Table" },
+    Default = "Around Player",
+    Callback = function(v) itemsDestination = v end
+})
+
+MagnetTab:Slider({
+    Title = "Circle Radius (Around You)",
+    Min = 2,
+    Max = 10,
+    Default = 3,
+    Step = 1,
+    Suffix = " studs",
+    Callback = function(v) playerCircleRadius = v end
+})
+
+MagnetTab:Section("Map Item List")
+local itemsDropdown = MagnetTab:Dropdown({
+    Title = "Select Item",
+    Values = { "Click Refresh Items List to scan" },
+    Default = "Click Refresh Items List to scan",
+    Callback = function(v) selectedItemName = v end
+})
+
+MagnetTab:Button({
+    Title = "Refresh Items List",
+    Desc = "Scans the map and updates the available item list with exact counts",
+    Icon = "refreshcw",
+    Callback = function()
+        task.spawn(function()
+            local newList = ScanNearbyItemsList()
+            pcall(function()
+                itemsDropdown:Refresh(newList)
+            end)
+            Notify("List Updated", "Found " .. #newList .. " item types on the map.", "circlecheck")
+        end)
+    end
+})
+
+MagnetTab:Slider({
+    Title = "List Scan Radius",
+    Min = 200,
+    Max = 3500,
+    Default = 2500,
+    Step = 100,
+    Suffix = " studs",
+    Callback = function(v) scanRadius = v end
+})
+
+MagnetTab:Button({
+    Title = "Attract Selected Item",
+    Desc = "Brings every copy of the selected item in a compact circle",
+    Icon = "target",
+    Callback = function()
+        if not itemsFolder or selectedItemName == "" or selectedItemName:find("No items") or selectedItemName:find("Click Refresh") then
+            Notify("Error", "Please select a valid item from the list first.", "trianglealert")
+            return
+        end
+
+        local cleanName = selectedItemName:gsub("%s*%([%d]+%)%s*$", "")
+        local selectedList = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            if item.Name == cleanName then
+                table.insert(selectedList, item)
+            end
+        end
+        SafeBatchTeleport(selectedList, itemsDestination, cleanName)
+    end
+})
+
+MagnetTab:Section("Filters and Mass Actions")
+MagnetTab:Toggle({
+    Title = "Ignore Already Nearby Items",
+    Desc = "Avoids re-moving items already resting at destination feet",
+    Default = false,
+    Callback = function(on) ignoreNearItems = on end
+})
+
+MagnetTab:Slider({
+    Title = "Ignore Zone Radius",
+    Min = 2,
+    Max = 25,
+    Default = 6,
+    Step = 1,
+    Suffix = " studs",
+    Callback = function(v) ignoreDistance = v end
+})
+
+MagnetTab:Button({
+    Title = "Bring ALL Ground Items",
+    Desc = "Pulls every loose resource on the entire map directly to destination",
+    Icon = "zap",
+    Callback = function()
+        if not itemsFolder then return end
+        local allItems = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            local isContainer = item.Name:find("Chest") or item.Name:find("Lunchbox")
+            if not isContainer then
+                table.insert(allItems, item)
+            end
+        end
+        SafeBatchTeleport(allItems, itemsDestination, "ground items")
+    end
+})
+
+MagnetTab:Button({
+    Title = "Bring All Cash & Sacks",
+    Desc = "Attracts all coin stacks, cash piles and money sacks",
+    Icon = "star",
+    Callback = function()
+        if not itemsFolder then return end
+        local money = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            local n = item.Name:lower()
+            local isCurrency = item:GetAttribute("Interaction") == "Currency" or n:find("coin") or n:find("sack") or n:find("bag") or n:find("cash")
+            if isCurrency then
+                table.insert(money, item)
+            end
+        end
+        SafeBatchTeleport(money, itemsDestination, "money sacks and coins")
+    end
+})
+
+MagnetTab:Button({
+    Title = "Open All Chests",
+    Desc = "Triggers all chests on the map to drop their loot onto the ground",
+    Icon = "key",
+    Callback = function()
+        if not itemsFolder or not openChestRemote then return end
+        task.spawn(function()
+            local count = 0
+            for _, it in ipairs(itemsFolder:GetChildren()) do
+                if (it.Name:find("Chest") or it.Name:find("Lunchbox")) and not it:GetAttribute("LocalOpened") then
+                    it:SetAttribute("LocalOpened", true)
+                    count = count + 1
+                    openChestRemote:FireServer(it)
+                    task.wait(0.04)
+                end
+            end
+            Notify("Chests", "Opened " .. count .. " chests across the map.", "circlecheck")
+        end)
+    end
+})
+
+MagnetTab:Button({
+    Title = "Bring Chest Loot Only",
+    Desc = "Attracts diamonds, guns, ammo, and high-tier loot dropped from chests",
+    Icon = "download",
+    Callback = function()
+        if not itemsFolder then return end
+        local loot = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            local isContainer = item.Name:find("Chest") or item.Name:find("Lunchbox")
+            if not isContainer and item.Name ~= "Log" then
+                table.insert(loot, item)
+            end
+        end
+        SafeBatchTeleport(loot, itemsDestination, "chest loot items")
+    end
+})
+
+MagnetTab:Button({
+    Title = "Bring Scrap & Mechanical Parts",
+    Desc = "Engines, fans, microwaves, iron plates, bolts, metal, and tires",
+    Icon = "settings",
+    Callback = function()
+        local junk = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            local n = item.Name:lower()
+            if n:find("fan") or n:find("microwave") or n:find("radio") or n:find("engine") or n:find("iron") or n:find("bolt") or n:find("metal") or n:find("tyre") or n:find("washing") then
+                table.insert(junk, item)
+            end
+        end
+        SafeBatchTeleport(junk, itemsDestination, "scrap and parts")
+    end
+})
+
+MagnetTab:Button({
+    Title = "Bring Food & Medicine",
+    Desc = "Berries, cooked meat, carrots, steaks, bandages, and cakes",
+    Icon = "heart",
+    Callback = function()
+        local food = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            local n = item.Name:lower()
+            if n:find("berry") or n:find("cake") or n:find("carrot") or n:find("steak") or n:find("ribs") or n:find("bandage") or n:find("morsel") or n:find("medkit") then
+                table.insert(food, item)
+            end
+        end
+        SafeBatchTeleport(food, itemsDestination, "food and medical supplies")
+    end
+})
+
+local TeleportTab = MainSection:Tab({ Title = "Teleports", Icon = "move" })
+
+TeleportTab:Section("Camp & Landmarks")
+TeleportTab:Button({
+    Title = "Teleport to Campfire",
+    Desc = "Teleports to the main camp fire",
+    Icon = "flame",
+    Callback = function() SafeTeleport(CAMPFIRE_POS + Vector3.new(0, 1.5, 0)) end
+})
+
+TeleportTab:Button({
+    Title = "Teleport to Crafting Table",
+    Desc = "Teleports to the campsite workbench",
+    Icon = "settings",
+    Callback = function() SafeTeleport(CRAFTING_POS + Vector3.new(0, 1.5, 0)) end
+})
+
+TeleportTab:Button({
+    Title = "Teleport to Notice Board",
+    Desc = "Teleports to the quest and missing poster board",
+    Icon = "list",
+    Callback = function() SafeTeleport(NOTICE_BOARD_POS) end
+})
+
+TeleportTab:Button({
+    Title = "Teleport to Furniture Trader",
+    Desc = "Teleports to the trader NPC",
+    Icon = "user",
+    Callback = function() SafeTeleport(TRADER_POS) end
+})
+
+TeleportTab:Section("Lost Children")
+TeleportTab:Button({
+    Title = "Teleport to Dino Kid",
+    Desc = "Dino Costume Kid location",
+    Icon = "move",
+    Callback = function() SafeTeleport(DINO_KID_POS) end
+})
+
+TeleportTab:Button({
+    Title = "Teleport to Koala Kid",
+    Desc = "Koala Costume Kid location",
+    Icon = "move",
+    Callback = function() SafeTeleport(KOALA_KID_POS) end
+})
+
+TeleportTab:Button({
+    Title = "Teleport to Kraken Kid",
+    Desc = "Kraken Costume Kid location",
+    Icon = "move",
+    Callback = function() SafeTeleport(KRAKEN_KID_POS) end
+})
+
+TeleportTab:Button({
+    Title = "Teleport to Squid Kid",
+    Desc = "Squid Costume Kid location",
+    Icon = "move",
+    Callback = function() SafeTeleport(SQUID_KID_POS) end
+})
+
+TeleportTab:Section("Custom Waypoint")
+TeleportTab:Button({
+    Title = "Save Current Position",
+    Desc = "Stores your current character coordinates for quick teleportation",
+    Icon = "check",
+    Callback = function()
+        local char = lp.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+        if root then
+            savedWaypointPos = root.Position
+            Notify("Waypoint Saved", string.format("Saved: (%.1f, %.1f, %.1f)", savedWaypointPos.X, savedWaypointPos.Y, savedWaypointPos.Z), "check")
+        else
+            Notify("Waypoint Error", "Character not found.", "trianglealert")
+        end
+    end
+})
+
+TeleportTab:Button({
+    Title = "Teleport to Saved Waypoint",
+    Desc = "Instantly teleports back to your saved position",
+    Icon = "move",
+    Callback = function()
+        if savedWaypointPos then
+            SafeTeleport(savedWaypointPos + Vector3.new(0, 1.5, 0))
+        else
+            Notify("Waypoint Error", "Save a position first.", "trianglealert")
+        end
+    end
+})
+
+local AfkTab = MainSection:Tab({ Title = "AFK Mode", Icon = "shield" })
+
+AfkTab:Section("AFK Survival Protection")
+AfkTab:Toggle({
+    Title = "Campfire Sky Haven (Safe AFK Hover)",
+    Desc = "Suspends player 14 studs above campfire: full warmth, immune to ground enemies",
+    Default = false,
+    Callback = function(on)
+        afkSkyHaven = on
+        afkSession = afkSession + 1
+        local mySession = afkSession
+
+        local char = lp.Character
+        local root = char and char:FindFirstChild("HumanoidRootPart")
+
+        if on then
+            if not root then
+                Notify("AFK Mode", "Character not found.", "trianglealert")
+                afkSkyHaven = false
+                return
+            end
+
+            savedGroundPos = root.Position
+            local havenPos = CAMPFIRE_POS + Vector3.new(0, 14, 0)
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.CFrame = CFrame.new(havenPos.X, havenPos.Y, havenPos.Z)
+            Notify("AFK Sky Haven", "Suspended above campfire. Safe from cold and ground enemies.", "shield")
+
+            task.spawn(function()
+                while afkSkyHaven and mySession == afkSession do
+                    local c = lp.Character
+                    local r = c and c:FindFirstChild("HumanoidRootPart")
+                    if r then
+                        r.AssemblyLinearVelocity = Vector3.zero
+                        r.Velocity = Vector3.zero
+                        r.CFrame = CFrame.new(havenPos.X, havenPos.Y, havenPos.Z)
+                    end
+                    task.wait(0.04)
+                end
+                local c = lp.Character
+                local r = c and c:FindFirstChild("HumanoidRootPart")
+                if r then
+                    r.AssemblyLinearVelocity = Vector3.zero
+                    if savedGroundPos then
+                        r.CFrame = CFrame.new(savedGroundPos.X, savedGroundPos.Y + 2, savedGroundPos.Z)
+                    end
+                end
+            end)
+        else
+            local c = lp.Character
+            local r = c and c:FindFirstChild("HumanoidRootPart")
+            if r then
+                r.AssemblyLinearVelocity = Vector3.zero
+                if savedGroundPos then
+                    r.CFrame = CFrame.new(savedGroundPos.X, savedGroundPos.Y + 2, savedGroundPos.Z)
+                end
+            end
+            Notify("AFK Sky Haven", "Disabled. Returned to ground safely.", "circlecheck")
+        end
+    end
+})
+
+AfkTab:Toggle({
+    Title = "Auto-Feed Campfire (AFK Loop)",
+    Desc = "Continuously keeps the campfire burning with any fuel found on the map",
+    Default = false,
+    Callback = function(on)
+        afkFeedCampfire = on
+        if on then
+            task.spawn(function()
+                while afkFeedCampfire do
+                    if itemsFolder then
+                        local fed = 0
+                        for _, item in ipairs(itemsFolder:GetChildren()) do
+                            if not afkFeedCampfire then break end
+                            if IsFuelItem(item) then
+                                local p = GetItemWorldPos(item)
+                                if p and (p - CAMPFIRE_POS).Magnitude > 4.5 then
+                                    MoveAllItemParts(item, CAMPFIRE_POS + Vector3.new(0, 1.2, 0))
+                                    fed = fed + 1
+                                    task.wait(0.08)
+                                    if fed >= 10 then break end
+                                end
+                            end
+                        end
+                    end
+                    task.wait(2.5)
+                end
+            end)
+            Notify("AFK Campfire", "Continuous fuel feeding active.", "flame")
+        end
+    end
+})
+
+AfkTab:Toggle({
+    Title = "Anti-Idle Kick Protection",
+    Desc = "Periodically resets Roblox idle timer to avoid 20 minute disconnects",
+    Default = false,
+    Callback = function(on)
+        afkAntiIdle = on
+        if on then
+            task.spawn(function()
+                local vu = game:GetService("VirtualUser")
+                while afkAntiIdle do
+                    task.wait(120)
+                    if not afkAntiIdle then break end
+                    pcall(function()
+                        vu:CaptureController()
+                        vu:ClickButton2(Vector2.zero)
+                    end)
+                end
+            end)
+            Notify("Anti-Idle Kick", "Anti-idle protection enabled.", "shield")
+        else
+            Notify("Anti-Idle Kick", "Anti-idle protection disabled.", "circlecheck")
+        end
+    end
+})
+
+AfkTab:Section("AFK Campfire Food Stash")
+AfkTab:Button({
+    Title = "Gather All Food & Meds to Campfire",
+    Desc = "Pulls all food, meat, and healing items around the campfire base",
+    Icon = "heart",
+    Callback = function()
+        if not itemsFolder then return end
+        local supplies = {}
+        for _, item in ipairs(itemsFolder:GetChildren()) do
+            local n = item.Name:lower()
+            if n:find("berry") or n:find("cake") or n:find("carrot") or n:find("steak") or n:find("ribs") or n:find("bandage") or n:find("morsel") or n:find("medkit") then
+                table.insert(supplies, item)
+            end
+        end
+        SafeBatchTeleport(supplies, "At Campfire", "provisions")
+    end
+})
+
+Notify("99 Nights Hub", "Loaded successfully.", "circlecheck")
