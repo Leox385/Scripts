@@ -16,7 +16,7 @@ local State = {
     AntiAFK = false,
     AutoFarmMobs = false,
     SelectedMob = "Bandit",
-    MobHeightOffset = 8.0,
+    MobHeightOffset = 11.0,
     MobAttackDelay = 0.1,
     AutoFarmBoss = false,
     SelectedBoss = "Akazo",
@@ -457,7 +457,7 @@ FarmMobsTab:AddSlider({
     Title = "Mob Hover Height",
     Min = 3,
     Max = 15,
-    Default = 8,
+    Default = 5,
     Step = 0.5,
     Callback = function(val)
         State.MobHeightOffset = val
@@ -559,7 +559,7 @@ FarmBossTab:AddSlider({
     Title = "Boss Hover Height",
     Min = 4,
     Max = 20,
-    Default = 11,
+    Default = 5,
     Step = 0.5,
     Callback = function(val)
         State.BossHeightOffset = val
@@ -570,7 +570,7 @@ FarmBossTab:AddSlider({
     Title = "Boss Distance Offset",
     Min = 2,
     Max = 12,
-    Default = 6,
+    Default = 5,
     Step = 0.5,
     Callback = function(val)
         State.BossBehindDistance = val
@@ -794,29 +794,21 @@ TrainTab:AddButton({
 })
 
 TrainTab:AddToggle({
-    Title = "Auto-Complete Minigames",
+    Title = "Auto-Train (Auto-Press T & Complete)",
     Default = false,
     Callback = function(val)
         State.AutoCompleteTraining = val
-    end
-})
-
-TrainTab:AddToggle({
-    Title = "Auto-Spam Skills",
-    Default = false,
-    Callback = function(val)
-        State.AutoSpamSkills = val
-    end
-})
-
-TrainTab:AddSlider({
-    Title = "Skill Spam Interval (Seconds)",
-    Min = 1,
-    Max = 5,
-    Default = 2,
-    Step = 0.5,
-    Callback = function(val)
-        State.SkillSpamInterval = val
+        if val then
+            UI:Notify({ Title = "Auto-Training", Content = "Active (Pressing T & Completing)", Type = "success", Duration = 3 })
+        else
+            if keyrelease then
+                pcall(function()
+                    keyrelease(116)
+                    keyrelease(84)
+                end)
+            end
+            UI:Notify({ Title = "Auto-Training", Content = "Paused", Type = "warn", Duration = 2 })
+        end
     end
 })
 
@@ -1235,17 +1227,63 @@ task.spawn(function()
         and ReplicatedStorage.Player_Service.Values:FindFirstChild(lp.Name)
         
     while State.Running do
-        if State.AutoCompleteTraining and playerValues then
-            local tr = playerValues:FindFirstChild("Training")
+        if State.AutoCompleteTraining then
+            if not playerValues or not playerValues.Parent then
+                playerValues = ReplicatedStorage:FindFirstChild("Player_Service")
+                    and ReplicatedStorage.Player_Service:FindFirstChild("Values")
+                    and ReplicatedStorage.Player_Service.Values:FindFirstChild(lp.Name)
+            end
+            
+            local tr = playerValues and playerValues:FindFirstChild("Training")
             if tr then
-                task.wait(0.3)
+                task.wait(0.35)
                 if RemoteEvent then
                     RemoteEvent:FireServer("training_signaler", "Stop", true)
                 end
-                task.wait(1)
+                local timeout = 0
+                while State.Running and State.AutoCompleteTraining and playerValues and playerValues:FindFirstChild("Training") and timeout < 20 do
+                    task.wait(0.1)
+                    timeout = timeout + 1
+                end
+                task.wait(0.5)
+            else
+                local char = lp.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                local targetPos = WorkoutTeleports and SelectedWorkout and WorkoutTeleports[SelectedWorkout]
+                
+                if hrp and targetPos and (targetPos - hrp.Position).Magnitude > 20 then
+                    safeTeleport(targetPos)
+                    task.wait(0.8)
+                end
+                
+                if setrobloxinput then pcall(function() setrobloxinput(true) end) end
+                if keypress then
+                    pcall(function()
+                        keypress(116)
+                        keypress(84)
+                    end)
+                end
+                
+                local holdTimer = 0
+                while State.Running and State.AutoCompleteTraining and holdTimer < 14 do
+                    if playerValues and playerValues:FindFirstChild("Training") then
+                        break
+                    end
+                    task.wait(0.1)
+                    holdTimer = holdTimer + 1
+                end
+                
+                if keyrelease then
+                    pcall(function()
+                        keyrelease(116)
+                        keyrelease(84)
+                    end)
+                end
+                task.wait(0.3)
             end
+        else
+            task.wait(0.4)
         end
-        task.wait(0.4)
     end
 end)
 
