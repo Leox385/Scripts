@@ -8,6 +8,9 @@ local lp = Players.LocalPlayer
 
 if _G.Slayers2Hub then
     _G.Slayers2Hub.Running = false
+    if _G.Slayers2Hub.ClearESP then
+        pcall(_G.Slayers2Hub.ClearESP)
+    end
     task.wait(0.2)
 end
 
@@ -21,14 +24,19 @@ local State = {
     MobBehindDistance = 2.4,
     MobAttackDelay = 0,
     FastAttack = false,
-    FastAttackBurst = 3,
+    FastAttackBurst = 10,
+    DamageMultiplier = 10,
+    SkyHoverHeight = 3.8,
+    InvisibleHitbox = true,
+    EnemyNeutralizer = false,
     HitboxExpander = false,
     HitboxSize = 20.0,
+    ReachAssist = false,
     AutoFarmBoss = false,
     SelectedBoss = "Akazo",
     Godmode = false,
     DefenseMode = "Behind Boss (Back-Lock 0 Damage)",
-    BossHeightOffset = 4.0,
+    BossHeightOffset = 3.8,
     BossBehindDistance = 2.6,
     AutoParry = false,
     HealthSafeguard = false,
@@ -40,7 +48,15 @@ local State = {
     AutoSpamSkills = false,
     SkillSpamInterval = 2.0,
     NoClip = false,
-    WalkSpeed = 16
+    WalkSpeed = 16,
+    AutoChest = false,
+    ESPMobs = false,
+    ESPBosses = false,
+    ESPPlants = false,
+    ESPChests = false,
+    ESPCrystals = false,
+    ESPDistance = 1200,
+    UnlockingLocations = false
 }
 _G.Slayers2Hub = State
 
@@ -74,6 +90,37 @@ local SignalEvent = ReplicatedStorage:FindFirstChild("Communication")
     and ReplicatedStorage.Communication.ServerAndClient:FindFirstChild("Signals")
     and ReplicatedStorage.Communication.ServerAndClient.Signals:FindFirstChild("SignalEvent")
 local RemoteEvent = SignalEvent and SignalEvent:FindFirstChild("Event")
+
+local function getPlayerValues()
+    local ps = ReplicatedStorage:FindFirstChild("Player_Service")
+    local vals = ps and ps:FindFirstChild("Values")
+    return vals and vals:FindFirstChild(lp.Name)
+end
+
+local function findNearestTrainingPrompt(hrp, maxDist)
+    local tr = Workspace:FindFirstChild("Training")
+    if not tr or not hrp then return nil, nil end
+    local bestPrompt = nil
+    local bestPart = nil
+    local bestDist = maxDist or 45.0
+    
+    for _, folder in ipairs(tr:GetChildren()) do
+        for _, desc in ipairs(folder:GetDescendants()) do
+            if desc.Name == "ProximityPrompt" or desc.ClassName == "ProximityPrompt" then
+                local part = desc.Parent
+                if part and (part.ClassName == "Part" or part.ClassName == "MeshPart") then
+                    local d = (part.Position - hrp.Position).Magnitude
+                    if d < bestDist then
+                        bestDist = d
+                        bestPrompt = desc
+                        bestPart = part
+                    end
+                end
+            end
+        end
+    end
+    return bestPrompt, bestPart
+end
 
 local RegionSpawns = {
     ["Bandit"] = Vector3.new(-287, 1224, -1008),
@@ -109,22 +156,43 @@ local RegularMobsList = {
     "Civilian",
     "*Civilian*",
     "Mizunoto",
+    "Village Spy",
+    "Karu Village Bandit",
     "Beast Born Demon",
     "Blood Hounded Demon",
-    "Bear Cub",
-    "Mother Bear",
-    "Hoyuzo Subordinate",
-    "Kaiden Subordinate",
     "Lesser Demon",
     "Greater Demon",
     "High Demon",
     "Ice Profound Demon",
     "Fire Profound Demon",
+    "Rogue Demon",
+    "Lost",
+    "Iceveil Road Pikeman",
+    "Iceveil Road Bandit",
+    "Iceveil Road Marauder",
+    "Bear Cub",
+    "Mother Bear",
+    "Hoyuzo Subordinate",
+    "Kaiden Subordinate",
     "Kanoe Demon Slayer",
     "Mizunoe Demon Slayer",
-    "Serpent Trainee",
     "Cache Lancer",
     "Cache Prowler",
+    "Grove Raider",
+    "Lancer Captain",
+    "Prowler Captain",
+    "Raid Captain",
+    "Serpent Trainee",
+    "Water Trainee",
+    "Thunder Trainee",
+    "Flame Trainee",
+    "Wind Trainee",
+    "Stone Trainee",
+    "Insect Trainee",
+    "Sound Trainee",
+    "Soryu Trainee",
+    "Tai Chi Trainee",
+    "Reaper Trainee",
     "All Regular Mobs"
 }
 
@@ -132,12 +200,29 @@ local BossMobsList = {
     "Akazo",
     "Gyutai",
     "Datai",
-    "Saneri",
+    "Domae",
+    "Reaper",
+    "Nezura",
+    "Yahari",
+    "Sumari",
+    "Enru",
+    "Yeti Demon",
+    "Small Yeti",
+    "Hand Demon",
     "Zuko",
     "Kaiden",
     "Hoyuzo",
     "Mother Bear",
     "Fujiko",
+    "Shinora (Hashira)",
+    "Obari (Hashira)",
+    "Saneri (Hashira)",
+    "Giyen (Hashira)",
+    "Tengai (Hashira)",
+    "Zentaro (Hashira)",
+    "Gyorei (Hashira)",
+    "Rengu (Hashira)",
+    "Muzan",
     "All Bosses"
 }
 
@@ -276,12 +361,16 @@ local TeleportZones = {
     ["Windy Peak (Main Village)"] = Vector3.new(-650, 1245, -1100),
     ["Bandit Camp (Windy Peak)"] = Vector3.new(-287, 1224, -1008),
     ["Mistfall Harbor (Docks)"] = Vector3.new(-888, 965, -26),
+    ["Mistfall Harbor (Spawn Crystal)"] = Vector3.new(135.8, 873.7, 734.1),
     ["Bamboo Grove (Bear Woods)"] = Vector3.new(540, 1122, -1023),
+    ["Bamboo Grove Sanctuary"] = Vector3.new(657.4, 1021.2, 139.7),
     ["Butterfly Estate"] = Vector3.new(32.2, 391.1, -73.9),
+    ["Hidden Mist Village"] = Vector3.new(-263.1, 1043.5, -1150.5),
     ["Iceveil Valley (Frozen Valley)"] = Vector3.new(485.3, 1222.9, -1813.4),
+    ["Iceveil Settlement"] = Vector3.new(-1046.8, 1133.5, -616.8),
     ["Final Selection Plains (Exam)"] = Vector3.new(-1800, 30, 500),
     ["Misc (Boss Arena & Trainees)"] = Vector3.new(-263.1, 1043.5, -1150.5),
-    ["Workout Grounds (Boulder Push)"] = Vector3.new(-306.3, 1071.0, -593.9)
+    ["Workout Grounds (Boulder Push)"] = Vector3.new(-311.6, 1071.6, -579.6)
 }
 
 local BossTeleports = {
@@ -293,10 +382,24 @@ local BossTeleports = {
     ["Kaiden"] = Vector3.new(510, 1122, -1000),
     ["Hoyuzo"] = Vector3.new(480, 1122, -1010),
     ["Mother Bear"] = Vector3.new(550, 1122, -1035),
-    ["Fujiko"] = Vector3.new(-1800, 30, 500)
+    ["Fujiko"] = Vector3.new(-1800, 30, 500),
+    ["Yeti Demon"] = Vector3.new(485.3, 1222.9, -1813.4),
+    ["Small Yeti"] = Vector3.new(485.3, 1222.9, -1813.4),
+    ["Hand Demon"] = Vector3.new(-1800, 30, 500),
+    ["Domae"] = Vector3.new(-1132.6, 1381.1, -1742.5),
+    ["Reaper"] = Vector3.new(-263.1, 1043.5, -1150.5),
+    ["Muzan"] = Vector3.new(182.1, 875.0, 697.0)
 }
 
 local TrainerTeleports = {
+    ["Fisherman Jeso (Mistfall)"] = Vector3.new(-192.0, 807.0, 602.7),
+    ["Alchemist Meku (Mistfall)"] = Vector3.new(-138.1, 798.9, 518.7),
+    ["Dock Master Sofen (Mistfall)"] = Vector3.new(-160.8, 798.8, 703.3),
+    ["Estate Worker Niko (Mistfall)"] = Vector3.new(341.1, 939.0, 580.6),
+    ["Ginzo (Mistfall)"] = Vector3.new(273.8, 944.0, 528.2),
+    ["Elara (Mistfall)"] = Vector3.new(427.8, 943.6, 507.4),
+    ["Jugg (Mistfall)"] = Vector3.new(487.7, 876.5, 1007.8),
+    ["Liv (Bamboo Grove)"] = Vector3.new(657.4, 1021.2, 139.7),
     ["Serpent Trainer Obari"] = Vector3.new(37.0, 1307.5, -1179.5),
     ["Serpent Trainee"] = Vector3.new(-171.3, 1279.0, -1475.1),
     ["Water Trainee Sabito"] = Vector3.new(-263.1, 1043.5, -1150.5),
@@ -306,22 +409,82 @@ local TrainerTeleports = {
     ["Stone Trainee"] = Vector3.new(-263.1, 1043.5, -1150.5),
     ["Insect Trainee"] = Vector3.new(-263.1, 1043.5, -1150.5),
     ["Sound Trainee"] = Vector3.new(-263.1, 1043.5, -1150.5),
-    ["Soryu Trainee Goki"] = Vector3.new(-263.1, 1043.5, -1150.5),
+    ["Soryu Trainee Goki"] = Vector3.new(-424.5, 289.1, 540.4),
     ["Tai Chi Trainee Suzume"] = Vector3.new(-263.1, 1043.5, -1150.5),
     ["Reaper Trainee Kuzan"] = Vector3.new(-263.1, 1043.5, -1150.5)
 }
 
 local WorkoutTeleports = {
-    ["Boulder Push (Strength)"] = Vector3.new(-306.3, 1071.0, -593.9),
+    ["Boulder Push (Strength)"] = Vector3.new(-311.6, 1071.6, -579.6),
     ["Boulder Split (Attack Power)"] = Vector3.new(-1041.4, 1131.0, -589.3)
 }
+
+local function isPlayerModel(m)
+    if not m then return true end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Character == m or p.Name == m.Name then return true end
+    end
+    return false
+end
+
+local function getActiveAnimationTracks(hum)
+    if not hum then return {} end
+    local animator = hum:FindFirstChildOfClass("Animator")
+    if animator and animator.GetPlayingAnimationTracks then
+        local ok, tracks = pcall(function() return animator:GetPlayingAnimationTracks() end)
+        if ok and tracks then return tracks end
+    end
+    if hum.GetPlayingAnimationTracks then
+        local ok, tracks = pcall(function() return hum:GetPlayingAnimationTracks() end)
+        if ok and tracks then return tracks end
+    end
+    return {}
+end
+
+local function getEntityLocation(name)
+    if not name then return Vector3.new(-287, 1224, -1008) end
+    if RegionSpawns[name] then return RegionSpawns[name] end
+    if BossTeleports[name] then return BossTeleports[name] end
+    for k, v in pairs(BossTeleports) do
+        if k:lower():find(name:lower(), 1, true) or name:lower():find(k:lower(), 1, true) then
+            return v
+        end
+    end
+    if TrainerTeleports[name] then return TrainerTeleports[name] end
+    for k, v in pairs(TrainerTeleports) do
+        if k:lower():find(name:lower(), 1, true) or name:lower():find(k:lower(), 1, true) then
+            return v
+        end
+    end
+    if TeleportZones[name] then return TeleportZones[name] end
+    for k, v in pairs(TeleportZones) do
+        if k:lower():find(name:lower(), 1, true) or name:lower():find(k:lower(), 1, true) then
+            return v
+        end
+    end
+    local lower = name:lower()
+    if lower:find("akazo") or lower:find("domae") or lower:find("yeti") or lower:find("profound") or lower:find("ice") or lower:find("snow") then
+        return Vector3.new(485.3, 1222.9, -1813.4)
+    elseif lower:find("mizunoe") or lower:find("kanoe") or lower:find("hand demon") or lower:find("fujiko") or lower:find("final") or lower:find("exam") then
+        return Vector3.new(-1800, 30, 500)
+    elseif lower:find("bear") or lower:find("bamboo") or lower:find("hoyuzo") or lower:find("kaiden") or lower:find("grove") or lower:find("lancer") or lower:find("prowler") then
+        return Vector3.new(540, 1122, -1023)
+    elseif lower:find("butterfly") or lower:find("estate") or lower:find("shiori") or lower:find("ren") or lower:find("shinora") or lower:find("lesser") or lower:find("greater") then
+        return Vector3.new(32.2, 391.1, -73.9)
+    elseif lower:find("harbor") or lower:find("mistfall") or lower:find("niko") or lower:find("ginzo") or lower:find("jeso") or lower:find("mizunoto") or lower:find("dock") then
+        return Vector3.new(135.8, 873.7, 734.1)
+    elseif lower:find("hidden mist") or lower:find("gyutai") or lower:find("datai") or lower:find("reaper") or lower:find("yahari") or lower:find("sumari") or lower:find("arena") then
+        return Vector3.new(-263.1, 1043.5, -1150.5)
+    end
+    return Vector3.new(-287, 1224, -1008)
+end
 
 local function safeTeleport(pos)
     local char = lp.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if hrp and pos then
         hrp.CFrame = CFrame.new(pos.X, pos.Y + 2.5, pos.Z)
-        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
     end
 end
 
@@ -398,15 +561,26 @@ local function smartTeleportToEntity(name, fallbackPos)
         if tr then
             for _, st in ipairs(tr:GetChildren()) do
                 if st.Name == name or st.Name:lower():find(name:lower(), 1, true) or name:lower():find(st.Name:lower(), 1, true) then
+                    local bPart = st:FindFirstChild("Boulder") or st:FindFirstChild("Boulder1")
+                    if bPart and (bPart.ClassName == "Part" or bPart.ClassName == "MeshPart") then
+                        foundPos = bPart.Position
+                        break
+                    end
                     for _, desc in ipairs(st:GetDescendants()) do
-                        if desc:IsA("BasePart") and (desc.Name == "Sign" or desc.Name == "Root" or desc.Name:find("Prompt") or desc.Name:find("Mat")) then
-                            foundPos = desc.Position
-                            break
+                        if (desc.ClassName == "Part" or desc.ClassName == "MeshPart") and desc.Name ~= "Goal" and desc.Name ~= "WagasaGoal" then
+                            if desc.Name:lower():find("boulder") or desc.Name == "Root" or desc.Name == "Prompt" or desc.Name:find("Mat") or desc.Name == "Sign" then
+                                foundPos = desc.Position
+                                break
+                            end
                         end
                     end
                     if not foundPos then
-                        local anyPart = st:FindFirstChildWhichIsA("BasePart", true)
-                        if anyPart then foundPos = anyPart.Position end
+                        for _, desc in ipairs(st:GetDescendants()) do
+                            if (desc.ClassName == "Part" or desc.ClassName == "MeshPart") and desc.Name ~= "Goal" and desc.Name ~= "WagasaGoal" then
+                                foundPos = desc.Position
+                                break
+                            end
+                        end
                     end
                     if foundPos then break end
                 end
@@ -432,7 +606,7 @@ local function smartTeleportToEntity(name, fallbackPos)
     local finalPos = foundPos or fallbackPos
     if finalPos then
         hrp.CFrame = CFrame.new(finalPos.X, finalPos.Y + 2.5, finalPos.Z + 2.0)
-        hrp.AssemblyLinearVelocity = Vector3.zero
+        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
         if UI and UI.Notify then
             UI:Notify({
                 Title = "Teleport",
@@ -455,45 +629,69 @@ end
 
 local function getTargets(targetName)
     local results = {}
-    local reg = Workspace:FindFirstChild("Humanoids") and Workspace.Humanoids:FindFirstChild("Regions")
-    if not reg then return results end
-    for _, r in ipairs(reg:GetChildren()) do
-        local active = r:FindFirstChild("ActiveNpcs")
-        if active then
-            for _, item in ipairs(active:GetChildren()) do
-                local match = false
-                if targetName == "All Regular Mobs" or targetName == "All Bosses" or targetName == "All Enemies" then
-                    match = true
-                elseif item.Name == targetName then
-                    match = true
-                end
-                
-                if match then
-                    local m = item:FindFirstChildOfClass("Model") or (item.ClassName == "Model" and item)
-                    if not m then
-                        for _, sub in ipairs(item:GetChildren()) do
-                            if sub.ClassName == "Model" and sub:FindFirstChildOfClass("Humanoid") then
-                                m = sub
-                                break
-                            end
+    local lowerTarget = targetName and targetName:lower() or ""
+    local isAll = (targetName == "All Regular Mobs" or targetName == "All Bosses" or targetName == "All Enemies")
+    
+    local function scanActiveFolder(activeFolder)
+        if not activeFolder then return end
+        for _, item in ipairs(activeFolder:GetChildren()) do
+            local match = false
+            local iName = item.Name:lower()
+            if isAll then
+                match = true
+            elseif item.Name == targetName or iName:find(lowerTarget, 1, true) or lowerTarget:find(iName, 1, true) then
+                match = true
+            end
+            
+            if match then
+                local m = item:FindFirstChildOfClass("Model") or (item.ClassName == "Model" and item)
+                if not m then
+                    for _, sub in ipairs(item:GetChildren()) do
+                        if sub.ClassName == "Model" and sub:FindFirstChildOfClass("Humanoid") then
+                            m = sub
+                            break
                         end
                     end
-                    if m then
-                        local hum = m:FindFirstChildOfClass("Humanoid")
-                        local root = m:FindFirstChild("HumanoidRootPart") or m:FindFirstChildWhichIsA("BasePart")
-                        if hum and root and hum.Health > 0 then
-                            table.insert(results, {
-                                Model = m,
-                                Humanoid = hum,
-                                Root = root,
-                                Name = item.Name
-                            })
-                        end
+                end
+                if m and not isPlayerModel(m) then
+                    local hum = m:FindFirstChildOfClass("Humanoid")
+                    local root = m:FindFirstChild("HumanoidRootPart") or m:FindFirstChildWhichIsA("BasePart")
+                    if hum and root and hum.Health > 0 then
+                        table.insert(results, {
+                            Model = m,
+                            Humanoid = hum,
+                            Root = root,
+                            Name = item.Name
+                        })
                     end
                 end
             end
         end
     end
+    
+    local hums = Workspace:FindFirstChild("Humanoids")
+    if hums then
+        local reg = hums:FindFirstChild("Regions")
+        if reg then
+            for _, r in ipairs(reg:GetChildren()) do
+                scanActiveFolder(r:FindFirstChild("ActiveNpcs"))
+            end
+        end
+        scanActiveFolder(hums:FindFirstChild("ActiveNpcs"))
+    end
+    
+    local deb = Workspace:FindFirstChild("Debree")
+    if deb then
+        local dReg = deb:FindFirstChild("Regions")
+        if dReg then
+            for _, r in ipairs(dReg:GetChildren()) do
+                scanActiveFolder(r:FindFirstChild("ActiveNpcs"))
+            end
+        end
+        scanActiveFolder(deb:FindFirstChild("ActiveNpcs"))
+        scanActiveFolder(deb)
+    end
+    
     return results
 end
 
@@ -541,14 +739,6 @@ local function getActiveQuest()
         end
     end
     return nil
-end
-
-local function isPlayerModel(m)
-    if not m then return true end
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p.Character == m or p.Name == m.Name then return true end
-    end
-    return false
 end
 
 local function resetHitboxes()
@@ -621,10 +811,278 @@ local function resetHitboxes()
     end
 end
 
+local ESP_POOL_SIZE = 48
+local espPool = {}
+local espTargets = {}
+
+for i = 1, ESP_POOL_SIZE do
+    local box = Drawing.new("Square")
+    box.Thickness = 1
+    box.Filled = false
+    box.Visible = false
+    
+    local tag = Drawing.new("Text")
+    tag.Size = 13
+    tag.Center = true
+    tag.Outline = true
+    tag.Visible = false
+    
+    espPool[i] = { box = box, tag = tag }
+end
+
+local function clearAllESP()
+    for i = 1, ESP_POOL_SIZE do
+        espPool[i].box.Visible = false
+        espPool[i].tag.Visible = false
+    end
+    espTargets = {}
+end
+State.ClearESP = clearAllESP
+
+local bossNameCheck = {
+    ["akazo"] = true, ["gyutai"] = true, ["datai"] = true, ["domae"] = true,
+    ["reaper"] = true, ["nezura"] = true, ["yahari"] = true, ["sumari"] = true,
+    ["enru"] = true, ["yeti demon"] = true, ["small yeti"] = true, ["hand demon"] = true,
+    ["zuko"] = true, ["kaiden"] = true, ["hoyuzo"] = true, ["mother bear"] = true,
+    ["fujiko"] = true, ["muzan"] = true, ["shinora"] = true, ["obari"] = true,
+    ["saneri"] = true, ["giyen"] = true, ["tengai"] = true, ["zentaro"] = true,
+    ["gyorei"] = true, ["rengu"] = true
+}
+
+task.spawn(function()
+    while State.Running do
+        local anyEsp = State.ESPMobs or State.ESPBosses or State.ESPPlants or State.ESPChests or State.ESPCrystals
+        if anyEsp then
+            local char = lp.Character
+            local myPos = char and char:FindFirstChild("HumanoidRootPart") and char.HumanoidRootPart.Position
+            if myPos then
+                local out = {}
+                local maxDist = State.ESPDistance or 1200
+                
+                if State.ESPMobs or State.ESPBosses then
+                    local hums = Workspace:FindFirstChild("Humanoids")
+                    local deb = Workspace:FindFirstChild("Debree")
+                    local containers = { hums, deb }
+                    
+                    for _, rootContainer in ipairs(containers) do
+                        if #out >= ESP_POOL_SIZE then break end
+                        local reg = rootContainer and rootContainer:FindFirstChild("Regions")
+                        if reg then
+                            for _, r in ipairs(reg:GetChildren()) do
+                                if #out >= ESP_POOL_SIZE then break end
+                                local active = r:FindFirstChild("ActiveNpcs")
+                                if active then
+                                    for _, item in ipairs(active:GetChildren()) do
+                                        if #out >= ESP_POOL_SIZE then break end
+                                        local m = item:FindFirstChildOfClass("Model") or (item.ClassName == "Model" and item)
+                                        if not m then
+                                            for _, s in ipairs(item:GetChildren()) do
+                                                if s.ClassName == "Model" then m = s break end
+                                            end
+                                        end
+                                        if m and not isPlayerModel(m) then
+                                            local hum = m:FindFirstChildOfClass("Humanoid")
+                                            local root = m:FindFirstChild("HumanoidRootPart") or m:FindFirstChildWhichIsA("BasePart")
+                                            local head = m:FindFirstChild("Head") or root
+                                            if root and hum and hum.Health > 0 then
+                                                local dist = (root.Position - myPos).Magnitude
+                                                if dist <= maxDist then
+                                                    local isBoss = false
+                                                    for bn, _ in pairs(bossNameCheck) do
+                                                        if m.Name:lower():find(bn, 1, true) then
+                                                            isBoss = true
+                                                            break
+                                                        end
+                                                    end
+                                                    if isBoss and State.ESPBosses then
+                                                        table.insert(out, {
+                                                            type = "model",
+                                                            name = "[BOSS] " .. m.Name .. " [" .. math.floor(hum.Health) .. " HP]",
+                                                            head = head,
+                                                            root = root,
+                                                            color = Color3.fromRGB(255, 60, 60)
+                                                        })
+                                                    elseif not isBoss and State.ESPMobs then
+                                                        table.insert(out, {
+                                                            type = "model",
+                                                            name = m.Name .. " (" .. math.floor(dist) .. "m)",
+                                                            head = head,
+                                                            root = root,
+                                                            color = Color3.fromRGB(255, 180, 50)
+                                                        })
+                                                    end
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                if State.ESPPlants and #out < ESP_POOL_SIZE then
+                    local deb = Workspace:FindFirstChild("Debree")
+                    if deb then
+                        for _, item in ipairs(deb:GetChildren()) do
+                            if #out >= ESP_POOL_SIZE then break end
+                            local iname = item.Name:lower()
+                            if iname:find("spider lily") or iname:find("flower") or iname:find("herb") then
+                                local p = item:FindFirstChildWhichIsA("BasePart")
+                                if p then
+                                    local dist = (p.Position - myPos).Magnitude
+                                    if dist <= maxDist then
+                                        table.insert(out, {
+                                            type = "point",
+                                            name = item.Name .. " (" .. math.floor(dist) .. "m)",
+                                            pos = p.Position,
+                                            color = Color3.fromRGB(60, 255, 120)
+                                        })
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    local mapAssets = Workspace:FindFirstChild("Map") and Workspace.Map:FindFirstChild("Map")
+                    if mapAssets and #out < ESP_POOL_SIZE then
+                        local clovers = mapAssets:FindFirstChild("Assets") and mapAssets.Assets:FindFirstChild("Clovers")
+                        if clovers then
+                            for _, ch in ipairs(clovers:GetChildren()) do
+                                if #out >= ESP_POOL_SIZE then break end
+                                local p = ch:FindFirstChildWhichIsA("BasePart") or ch
+                                if p and p.ClassName == "MeshPart" then
+                                    local dist = (p.Position - myPos).Magnitude
+                                    if dist <= maxDist then
+                                        table.insert(out, {
+                                            type = "point",
+                                            name = "Clover (" .. math.floor(dist) .. "m)",
+                                            pos = p.Position,
+                                            color = Color3.fromRGB(80, 255, 80)
+                                        })
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                if State.ESPChests and #out < ESP_POOL_SIZE then
+                    local chests = Workspace:FindFirstChild("Chests")
+                    if chests then
+                        for _, ch in ipairs(chests:GetChildren()) do
+                            if #out >= ESP_POOL_SIZE then break end
+                            local p = ch:FindFirstChildWhichIsA("BasePart") or ch:FindFirstChild("HumanoidRootPart") or ch:FindFirstChild("Root")
+                            if p then
+                                table.insert(list, {
+                                    type = "point",
+                                    name = "[CHEST] " .. ch.Name .. " (" .. math.floor(dist) .. "m)",
+                                    pos = p.Position,
+                                    color = Color3.fromRGB(255, 220, 40)
+                                })
+                            end
+                        end
+                    end
+                end
+                
+                if State.ESPCrystals and #out < ESP_POOL_SIZE then
+                    local deb = Workspace:FindFirstChild("Debree")
+                    local dReg = deb and deb:FindFirstChild("Regions")
+                    if dReg then
+                        for _, r in ipairs(dReg:GetChildren()) do
+                            if #out >= ESP_POOL_SIZE then break end
+                            for _, c in ipairs(r:GetChildren()) do
+                                if #out >= ESP_POOL_SIZE then break end
+                                if c.Name:lower():find("crystal") or c.Name:lower():find("spawn") then
+                                    local p = c:FindFirstChild("Root") or c:FindFirstChild("Cube") or c:FindFirstChildWhichIsA("BasePart")
+                                    if p then
+                                        local dist = (p.Position - myPos).Magnitude
+                                        if dist <= maxDist then
+                                            table.insert(out, {
+                                                type = "point",
+                                                name = "[SPAWN] " .. r.Name .. " (" .. math.floor(dist) .. "m)",
+                                                pos = p.Position,
+                                                color = Color3.fromRGB(200, 80, 255)
+                                            })
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                
+                espTargets = out
+            end
+        else
+            if #espTargets > 0 then
+                clearAllESP()
+            end
+        end
+        task.wait(0.35)
+    end
+end)
+
+local espConn
+espConn = RunService.RenderStepped:Connect(function()
+    if not State.Running then
+        clearAllESP()
+        if espConn then espConn:Disconnect() end
+        return
+    end
+    local list = espTargets
+    local n = 0
+    local total = #list
+    for i = 1, total do
+        if n >= ESP_POOL_SIZE then break end
+        local t = list[i]
+        if t.type == "model" and t.head and t.root then
+            local top, v1 = WorldToScreen(t.head.Position + Vector3.new(0, 0.7, 0))
+            local bot, v2 = WorldToScreen(t.root.Position - Vector3.new(0, 3.2, 0))
+            if v1 and v2 then
+                n = n + 1
+                local e = espPool[n]
+                local h = bot.Y - top.Y
+                local w = h * 0.5
+                e.box.Position = Vector2.new(top.X - w * 0.5, top.Y)
+                e.box.Size = Vector2.new(w, h)
+                e.box.Color = t.color
+                e.box.Visible = true
+                
+                e.tag.Text = t.name
+                e.tag.Position = Vector2.new(top.X, top.Y - 16)
+                e.tag.Color = t.color
+                e.tag.Visible = true
+            end
+        elseif t.type == "point" and t.pos then
+            local screenPos, v1 = WorldToScreen(t.pos)
+            if v1 then
+                n = n + 1
+                local e = espPool[n]
+                local size = 16
+                e.box.Position = Vector2.new(screenPos.X - size * 0.5, screenPos.Y - size * 0.5)
+                e.box.Size = Vector2.new(size, size)
+                e.box.Color = t.color
+                e.box.Visible = true
+                
+                e.tag.Text = t.name
+                e.tag.Position = Vector2.new(screenPos.X, screenPos.Y - 18)
+                e.tag.Color = t.color
+                e.tag.Visible = true
+            end
+        end
+    end
+    for i = n + 1, ESP_POOL_SIZE do
+        espPool[i].box.Visible = false
+        espPool[i].tag.Visible = false
+    end
+end)
+
 local FarmMobsTab = UI:AddTab({ Title = "Auto-Farm (Mobs)", Icon = "script" })
 local FarmBossTab = UI:AddTab({ Title = "Boss Farm & Defense", Icon = "script" })
 local QuestTab = UI:AddTab({ Title = "Quests", Icon = "script" })
 local TeleportTab = UI:AddTab({ Title = "Teleports", Icon = "gear" })
+local ChestTab = UI:AddTab({ Title = "Chests & Loot", Icon = "script" })
+local ESPTab = UI:AddTab({ Title = "ESP & Visuals", Icon = "eye" })
 local TrainTab = UI:AddTab({ Title = "Training", Icon = "script" })
 local MiscTab = UI:AddTab({ Title = "Settings", Icon = "gear" })
 
@@ -672,6 +1130,17 @@ FarmMobsTab:AddDropdown({
     end
 })
 
+FarmMobsTab:AddSlider({
+    Title = "Sky God-Hover Height",
+    Min = 2.5,
+    Max = 6.0,
+    Default = 3.8,
+    Step = 0.1,
+    Callback = function(val)
+        State.SkyHoverHeight = val
+    end
+})
+
 FarmMobsTab:AddToggle({
     Title = "Ultra Fast Attack / Stun-Lock",
     Default = false,
@@ -681,12 +1150,13 @@ FarmMobsTab:AddToggle({
 })
 
 FarmMobsTab:AddSlider({
-    Title = "Hits per Strike (Stun Multiplier)",
+    Title = "Damage Multiplier (10x Hits = 100 Dmg)",
     Min = 1,
-    Max = 6,
-    Default = 3,
+    Max = 25,
+    Default = 10,
     Step = 1,
     Callback = function(val)
+        State.DamageMultiplier = val
         State.FastAttackBurst = val
     end
 })
@@ -700,6 +1170,14 @@ FarmMobsTab:AddToggle({
     end
 })
 
+FarmMobsTab:AddToggle({
+    Title = "Invisible Hitbox (Keep NPCs Normal Size)",
+    Default = true,
+    Callback = function(val)
+        State.InvisibleHitbox = val
+    end
+})
+
 FarmMobsTab:AddSlider({
     Title = "Hitbox Size (Attack Reach)",
     Min = 8,
@@ -708,6 +1186,30 @@ FarmMobsTab:AddSlider({
     Step = 1,
     Callback = function(val)
         State.HitboxSize = val
+    end
+})
+
+FarmMobsTab:AddToggle({
+    Title = "Combat Reach Assist (Server Hit Sync)",
+    Default = false,
+    Callback = function(val)
+        State.ReachAssist = val
+        if val then
+            UI:Notify({ Title = "Reach Assist", Content = "Active (Syncs hits to register server damage)", Type = "success", Duration = 2 })
+        else
+            UI:Notify({ Title = "Reach Assist", Content = "Disabled", Type = "warn", Duration = 2 })
+        end
+    end
+})
+
+FarmMobsTab:AddToggle({
+    Title = "Enemy AI Freeze / Ignore (Mobs Don't Attack)",
+    Default = false,
+    Callback = function(val)
+        State.EnemyNeutralizer = val
+        if val then
+            UI:Notify({ Title = "AI Freeze", Content = "Mobs pacified & abilities stopped", Type = "success", Duration = 2 })
+        end
     end
 })
 
@@ -794,6 +1296,17 @@ FarmBossTab:AddDropdown({
     end
 })
 
+FarmBossTab:AddSlider({
+    Title = "Sky God-Hover Height",
+    Min = 2.5,
+    Max = 6.0,
+    Default = 3.8,
+    Step = 0.1,
+    Callback = function(val)
+        State.SkyHoverHeight = val
+    end
+})
+
 FarmBossTab:AddToggle({
     Title = "Ultra Fast Attack / Stun-Lock",
     Default = false,
@@ -803,12 +1316,13 @@ FarmBossTab:AddToggle({
 })
 
 FarmBossTab:AddSlider({
-    Title = "Hits per Strike (Boss Melter)",
+    Title = "Damage Multiplier (10x Hits = 100 Dmg)",
     Min = 1,
-    Max = 6,
-    Default = 4,
+    Max = 25,
+    Default = 10,
     Step = 1,
     Callback = function(val)
+        State.DamageMultiplier = val
         State.FastAttackBurst = val
     end
 })
@@ -822,6 +1336,14 @@ FarmBossTab:AddToggle({
     end
 })
 
+FarmBossTab:AddToggle({
+    Title = "Invisible Hitbox (Keep Boss Normal Size)",
+    Default = true,
+    Callback = function(val)
+        State.InvisibleHitbox = val
+    end
+})
+
 FarmBossTab:AddSlider({
     Title = "Hitbox Size (Attack Reach)",
     Min = 8,
@@ -830,6 +1352,30 @@ FarmBossTab:AddSlider({
     Step = 1,
     Callback = function(val)
         State.HitboxSize = val
+    end
+})
+
+FarmBossTab:AddToggle({
+    Title = "Combat Reach Assist (Server Hit Sync)",
+    Default = false,
+    Callback = function(val)
+        State.ReachAssist = val
+        if val then
+            UI:Notify({ Title = "Reach Assist", Content = "Active (Syncs hits to register server damage)", Type = "success", Duration = 2 })
+        else
+            UI:Notify({ Title = "Reach Assist", Content = "Disabled", Type = "warn", Duration = 2 })
+        end
+    end
+})
+
+FarmBossTab:AddToggle({
+    Title = "Enemy AI Freeze / Ignore (Bosses Don't Attack)",
+    Default = false,
+    Callback = function(val)
+        State.EnemyNeutralizer = val
+        if val then
+            UI:Notify({ Title = "AI Freeze", Content = "Bosses pacified & skills disabled", Type = "success", Duration = 2 })
+        end
     end
 })
 
@@ -1042,6 +1588,207 @@ TeleportTab:AddButton({
     end
 })
 
+local CrystalWaypoints = {
+    { Region = "Mistfall Harbor", Name = "Mistfall Harbor", Pos = Vector3.new(135.8, 873.7, 734.1) },
+    { Region = "Windy Peak", Name = "Windy Peak", Pos = Vector3.new(-650, 1245, -1100) },
+    { Region = "Bamboo Grove", Name = "Bamboo Grove Sanctuary", Pos = Vector3.new(540, 1122, -1023) },
+    { Region = "Bamboo Grove", Name = "Bamboo Grove", Pos = Vector3.new(657.4, 1021.2, 139.7) },
+    { Region = "Butterfly Estate", Name = "Butterfly Estate", Pos = Vector3.new(32.2, 391.1, -73.9) },
+    { Region = "Hidden Mist Village", Name = "Hidden Mist Village", Pos = Vector3.new(-263.1, 1043.5, -1150.5) },
+    { Region = "Iceveil Valley", Name = "Iceveil Settlement", Pos = Vector3.new(485.3, 1222.9, -1813.4) },
+    { Region = "Final Selection Plains", Name = "Final Selection", Pos = Vector3.new(-1800, 30, 500) }
+}
+
+local function unlockAllLocations()
+    if State.UnlockingLocations then
+        UI:Notify({ Title = "Unlock Locations", Content = "Already in progress...", Type = "warn", Duration = 2 })
+        return
+    end
+    State.UnlockingLocations = true
+    task.spawn(function()
+        UI:Notify({ Title = "Unlock Locations", Content = "Starting automatic crystal discovery...", Type = "info", Duration = 3 })
+        local deb = Workspace:FindFirstChild("Debree")
+        local dReg = deb and deb:FindFirstChild("Regions")
+        
+        for idx, entry in ipairs(CrystalWaypoints) do
+            if not State.Running or not State.UnlockingLocations then break end
+            UI:Notify({ Title = "Discovery (" .. idx .. "/" .. #CrystalWaypoints .. ")", Content = "Traveling to: " .. entry.Name, Type = "info", Duration = 2 })
+            
+            safeTeleport(entry.Pos + Vector3.new(0, 3, 0))
+            task.wait(1.0)
+            
+            local foundTarget = nil
+            if dReg then
+                local reg = dReg:FindFirstChild(entry.Region)
+                if reg then
+                    for _, ch in ipairs(reg:GetChildren()) do
+                        if ch.Name:lower():find("crystal") or ch.Name:lower():find("spawn") then
+                            local root = ch:FindFirstChild("Root") or ch:FindFirstChild("Cube") or ch:FindFirstChildWhichIsA("BasePart")
+                            if root then
+                                foundTarget = root
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+            
+            if foundTarget then
+                safeTeleport(foundTarget.Position + Vector3.new(0, 1.5, 2.5))
+                task.wait(0.3)
+                
+                for _, desc in ipairs(foundTarget.Parent:GetDescendants()) do
+                    if desc.ClassName == "ProximityPrompt" and desc.Enabled then
+                        if fireproximityprompt then
+                            pcall(function() fireproximityprompt(desc) end)
+                        end
+                    end
+                end
+            end
+            
+            pcall(function()
+                if setrobloxinput then setrobloxinput(true) end
+                keypress(84)
+            end)
+            task.wait(1.5)
+            pcall(function()
+                keyrelease(84)
+            end)
+            
+            task.wait(0.5)
+        end
+        State.UnlockingLocations = false
+        UI:Notify({ Title = "Unlock Complete", Content = "All location crystals visited and activated!", Type = "success", Duration = 4 })
+    end)
+end
+
+TeleportTab:AddButton({
+    Title = "Unlock All Locations (Spawn Crystals)",
+    ButtonText = "Unlock All",
+    Callback = function()
+        unlockAllLocations()
+    end
+})
+
+local function getActiveChests()
+    local list = {}
+    local chests = Workspace:FindFirstChild("Chests")
+    if chests then
+        for _, ch in ipairs(chests:GetChildren()) do
+            local p = ch:FindFirstChildWhichIsA("BasePart") or ch:FindFirstChild("HumanoidRootPart") or ch:FindFirstChild("Root")
+            if p then
+                table.insert(list, { Instance = ch, Name = ch.Name, Position = p.Position })
+            end
+        end
+    end
+    local deb = Workspace:FindFirstChild("Debree")
+    if deb then
+        for _, ch in ipairs(deb:GetChildren()) do
+            if ch.Name:lower():find("chest") and ch.ClassName == "Model" then
+                local p = ch:FindFirstChildWhichIsA("BasePart") or ch:FindFirstChild("HumanoidRootPart")
+                if p then
+                    table.insert(list, { Instance = ch, Name = ch.Name, Position = p.Position })
+                end
+            end
+        end
+    end
+    return list
+end
+
+ChestTab:AddButton({
+    Title = "Teleport to Active Chest",
+    ButtonText = "Teleport",
+    Callback = function()
+        local active = getActiveChests()
+        if #active > 0 then
+            local target = active[1]
+            safeTeleport(target.Position + Vector3.new(0, 3, 0))
+            UI:Notify({ Title = "Chest Found", Content = "Teleported to: " .. target.Name, Type = "success", Duration = 3 })
+        else
+            UI:Notify({ Title = "No Active Chests", Content = "World chests spawn during World Events and mob raids.", Type = "warn", Duration = 3 })
+        end
+    end
+})
+
+ChestTab:AddToggle({
+    Title = "Auto-Teleport to Chests on Spawn",
+    Default = false,
+    Callback = function(val)
+        State.AutoChest = val
+        if val then
+            UI:Notify({ Title = "Chest Auto-Teleport", Content = "Active (Monitoring World Chests)", Type = "success", Duration = 2 })
+        else
+            UI:Notify({ Title = "Chest Auto-Teleport", Content = "Disabled", Type = "warn", Duration = 2 })
+        end
+    end
+})
+
+ESPTab:AddToggle({
+    Title = "Mobs ESP",
+    Default = false,
+    Callback = function(val)
+        State.ESPMobs = val
+        if not val and not (State.ESPBosses or State.ESPPlants or State.ESPChests or State.ESPCrystals) then
+            clearAllESP()
+        end
+    end
+})
+
+ESPTab:AddToggle({
+    Title = "Bosses ESP",
+    Default = false,
+    Callback = function(val)
+        State.ESPBosses = val
+        if not val and not (State.ESPMobs or State.ESPPlants or State.ESPChests or State.ESPCrystals) then
+            clearAllESP()
+        end
+    end
+})
+
+ESPTab:AddToggle({
+    Title = "Plants & Collectibles ESP",
+    Default = false,
+    Callback = function(val)
+        State.ESPPlants = val
+        if not val and not (State.ESPMobs or State.ESPBosses or State.ESPChests or State.ESPCrystals) then
+            clearAllESP()
+        end
+    end
+})
+
+ESPTab:AddToggle({
+    Title = "Chests ESP",
+    Default = false,
+    Callback = function(val)
+        State.ESPChests = val
+        if not val and not (State.ESPMobs or State.ESPBosses or State.ESPPlants or State.ESPCrystals) then
+            clearAllESP()
+        end
+    end
+})
+
+ESPTab:AddToggle({
+    Title = "Spawn Crystals ESP",
+    Default = false,
+    Callback = function(val)
+        State.ESPCrystals = val
+        if not val and not (State.ESPMobs or State.ESPBosses or State.ESPPlants or State.ESPChests) then
+            clearAllESP()
+        end
+    end
+})
+
+ESPTab:AddSlider({
+    Title = "ESP Max Distance",
+    Min = 100,
+    Max = 3000,
+    Default = 1200,
+    Step = 50,
+    Callback = function(val)
+        State.ESPDistance = val
+    end
+})
+
 local WorkoutNames = {}
 for k, _ in pairs(WorkoutTeleports) do table.insert(WorkoutNames, k) end
 table.sort(WorkoutNames)
@@ -1073,7 +1820,6 @@ TrainTab:AddToggle({
         else
             if keyrelease then
                 pcall(function()
-                    keyrelease(116)
                     keyrelease(84)
                 end)
             end
@@ -1103,12 +1849,40 @@ MiscTab:AddToggle({
     end
 })
 
+MiscTab:AddSlider({
+    Title = "Damage Multiplier (10x Hits = 100 Dmg)",
+    Min = 1,
+    Max = 25,
+    Default = 10,
+    Step = 1,
+    Callback = function(val)
+        State.DamageMultiplier = val
+        State.FastAttackBurst = val
+    end
+})
+
 MiscTab:AddToggle({
     Title = "Enemy Hitbox Expander",
     Default = false,
     Callback = function(val)
         State.HitboxExpander = val
         if not val then resetHitboxes() end
+    end
+})
+
+MiscTab:AddToggle({
+    Title = "Invisible Hitbox (Keep NPCs Normal Size)",
+    Default = true,
+    Callback = function(val)
+        State.InvisibleHitbox = val
+    end
+})
+
+MiscTab:AddToggle({
+    Title = "Enemy AI Freeze / Ignore (Mobs Don't Attack)",
+    Default = false,
+    Callback = function(val)
+        State.EnemyNeutralizer = val
     end
 })
 
@@ -1200,20 +1974,41 @@ local targetHitboxParts = {"HumanoidRootPart", "UpperTorso", "LowerTorso", "Tors
 local function expandModelHitbox(m, size)
     local hum = m:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health <= 0 then return end
-    for _, partName in ipairs(targetHitboxParts) do
-        local p = m:FindFirstChild(partName)
-        if p and (p.ClassName == "Part" or p.ClassName == "MeshPart") then
-            if p.Size.X ~= size then
-                p.Size = Vector3.new(size, size, size)
-                p.CanCollide = false
+    
+    if State.InvisibleHitbox then
+        local hrp = m:FindFirstChild("HumanoidRootPart")
+        if hrp and (hrp.ClassName == "Part" or hrp.ClassName == "MeshPart") then
+            if hrp.Size.X ~= size then
+                hrp.Size = Vector3.new(size, size, size)
+                hrp.CanCollide = false
+                pcall(function() hrp.Transparency = 1 end)
             end
         end
-    end
-    for _, ch in ipairs(m:GetChildren()) do
-        if (ch.ClassName == "Part" or ch.ClassName == "MeshPart") and ch.Name:lower():find("hitbox") then
-            if ch.Size.X ~= size then
-                ch.Size = Vector3.new(size, size, size)
-                ch.CanCollide = false
+        for _, ch in ipairs(m:GetChildren()) do
+            if (ch.ClassName == "Part" or ch.ClassName == "MeshPart") and ch.Name:lower():find("hitbox") then
+                if ch.Size.X ~= size then
+                    ch.Size = Vector3.new(size, size, size)
+                    ch.CanCollide = false
+                    pcall(function() ch.Transparency = 1 end)
+                end
+            end
+        end
+    else
+        for _, partName in ipairs(targetHitboxParts) do
+            local p = m:FindFirstChild(partName)
+            if p and (p.ClassName == "Part" or p.ClassName == "MeshPart") then
+                if p.Size.X ~= size then
+                    p.Size = Vector3.new(size, size, size)
+                    p.CanCollide = false
+                end
+            end
+        end
+        for _, ch in ipairs(m:GetChildren()) do
+            if (ch.ClassName == "Part" or ch.ClassName == "MeshPart") and ch.Name:lower():find("hitbox") then
+                if ch.Size.X ~= size then
+                    ch.Size = Vector3.new(size, size, size)
+                    ch.CanCollide = false
+                end
             end
         end
     end
@@ -1267,7 +2062,145 @@ task.spawn(function()
                 end
             end
         end
-        task.wait(0.5)
+        task.wait(0.12)
+    end
+end)
+
+task.spawn(function()
+    while State.Running do
+        if State.EnemyNeutralizer then
+            local char = lp.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local myPos = hrp and hrp.Position
+            if myPos then
+                local hums = Workspace:FindFirstChild("Humanoids")
+                local deb = Workspace:FindFirstChild("Debree")
+                local containers = { hums, deb }
+                for _, rootContainer in ipairs(containers) do
+                    local reg = rootContainer and rootContainer:FindFirstChild("Regions")
+                    if reg then
+                        for _, r in ipairs(reg:GetChildren()) do
+                            local active = r:FindFirstChild("ActiveNpcs")
+                            if active then
+                                for _, item in ipairs(active:GetChildren()) do
+                                    local m = item:FindFirstChildOfClass("Model") or (item.ClassName == "Model" and item)
+                                    if not m then
+                                        for _, s in ipairs(item:GetChildren()) do
+                                            if s.ClassName == "Model" then m = s break end
+                                        end
+                                    end
+                                    if m and not isPlayerModel(m) then
+                                        local eHum = m:FindFirstChildOfClass("Humanoid")
+                                        local eRoot = m:FindFirstChild("HumanoidRootPart") or m:FindFirstChildWhichIsA("BasePart")
+                                        if eHum and eRoot and eHum.Health > 0 then
+                                            local dist = (eRoot.Position - myPos).Magnitude
+                                            if dist <= 40 then
+                                                pcall(function()
+                                                    m:SetAttribute("last_cmbat", 0)
+                                                    m:SetAttribute("Stunned", true)
+                                                    m:SetAttribute("Target", nil)
+                                                    eHum.WalkSpeed = 0
+                                                    eRoot.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                                                end)
+                                                for _, track in ipairs(getActiveAnimationTracks(eHum)) do
+                                                    local tName = track.Name:lower()
+                                                    if tName:find("attack") or tName:find("skill") or tName:find("cast") or tName:find("slam") or tName:find("punch") or tName:find("slash") then
+                                                        pcall(function() track:Stop(0) end)
+                                                    end
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        task.wait(0.1)
+    end
+end)
+
+task.spawn(function()
+    while State.Running do
+        if State.ReachAssist and not State.AutoFarmMobs and not State.AutoFarmBoss then
+            local char = lp.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local isAttacking = false
+                if ismouse1pressed and ismouse1pressed() then isAttacking = true end
+                if not isAttacking and iskeypressed and (iskeypressed(102) or iskeypressed(114)) then isAttacking = true end
+                
+                if isAttacking then
+                    local targetNpc = nil
+                    local targetDist = State.HitboxSize or 20.0
+                    
+                    local hums = Workspace:FindFirstChild("Humanoids")
+                    local deb = Workspace:FindFirstChild("Debree")
+                    local containers = { hums, deb }
+                    
+                    for _, rootContainer in ipairs(containers) do
+                        if targetNpc then break end
+                        local reg = rootContainer and rootContainer:FindFirstChild("Regions")
+                        if reg then
+                            for _, r in ipairs(reg:GetChildren()) do
+                                if targetNpc then break end
+                                local active = r:FindFirstChild("ActiveNpcs")
+                                if active then
+                                    for _, item in ipairs(active:GetChildren()) do
+                                        local m = item:FindFirstChildOfClass("Model") or (item.ClassName == "Model" and item)
+                                        if not m then
+                                            for _, s in ipairs(item:GetChildren()) do
+                                                if s.ClassName == "Model" then m = s break end
+                                            end
+                                        end
+                                        if m and not isPlayerModel(m) then
+                                            local mRoot = m:FindFirstChild("HumanoidRootPart")
+                                            local hum = m:FindFirstChildOfClass("Humanoid")
+                                            if mRoot and hum and hum.Health > 0 then
+                                                local d = (mRoot.Position - hrp.Position).Magnitude
+                                                if d <= targetDist then
+                                                    targetDist = d
+                                                    targetNpc = mRoot
+                                                end
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                    
+                    if targetNpc then
+                        local safeBehind = targetNpc.CFrame * CFrame.new(0, 3.8, 2.4)
+                        hrp.CFrame = safeBehind
+                        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        task.wait(0.12)
+                    end
+                end
+            end
+        end
+        task.wait(0.06)
+    end
+end)
+
+task.spawn(function()
+    while State.Running do
+        if State.AutoChest then
+            local active = getActiveChests()
+            if #active > 0 then
+                local target = active[1]
+                local char = lp.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if hrp and (hrp.Position - target.Position).Magnitude > 15 then
+                    safeTeleport(target.Position + Vector3.new(0, 3, 0))
+                    UI:Notify({ Title = "Auto-Chest Teleport", Content = "Arrived at: " .. target.Name, Type = "info", Duration = 2 })
+                    task.wait(2.0)
+                end
+            end
+        end
+        task.wait(1.5)
     end
 end)
 
@@ -1299,50 +2232,68 @@ task.spawn(function()
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             
             if hum and hrp and hum.Health > 0 then
-                local shouldGuard = State.AutoFarmBoss or State.AutoFarmMobs or State.AutoQuestTasks
+                local shouldParry = false
+                local hums = Workspace:FindFirstChild("Humanoids")
+                local deb = Workspace:FindFirstChild("Debree")
+                local containers = { hums, deb }
                 
-                if not shouldGuard then
-                    local reg = Workspace:FindFirstChild("Humanoids") and Workspace.Humanoids:FindFirstChild("Regions")
+                for _, rootContainer in ipairs(containers) do
+                    if shouldParry then break end
+                    local reg = rootContainer and rootContainer:FindFirstChild("Regions")
                     if reg then
                         for _, r in ipairs(reg:GetChildren()) do
+                            if shouldParry then break end
                             local active = r:FindFirstChild("ActiveNpcs")
                             if active then
                                 for _, item in ipairs(active:GetChildren()) do
                                     local m = item:FindFirstChildOfClass("Model") or (item.ClassName == "Model" and item)
-                                    local eRoot = m and (m:FindFirstChild("HumanoidRootPart") or m:FindFirstChildWhichIsA("BasePart"))
-                                    local eHum = m and m:FindFirstChildOfClass("Humanoid")
-                                    if eRoot and eHum and eHum.Health > 0 then
-                                        if (eRoot.Position - hrp.Position).Magnitude <= 22 then
-                                            shouldGuard = true
-                                            break
+                                    if not m then
+                                        for _, s in ipairs(item:GetChildren()) do
+                                            if s.ClassName == "Model" then m = s break end
                                         end
                                     end
+                                    if m and not isPlayerModel(m) then
+                                        local eHum = m:FindFirstChildOfClass("Humanoid")
+                                        local eRoot = m:FindFirstChild("HumanoidRootPart") or m:FindFirstChildWhichIsA("BasePart")
+                                        if eHum and eRoot and eHum.Health > 0 then
+                                            local dist = (eRoot.Position - hrp.Position).Magnitude
+                                            if dist <= 18 then
+                                                for _, track in ipairs(getActiveAnimationTracks(eHum)) do
+                                                    local tName = track.Name:lower()
+                                                    if tName:find("attack") or tName:find("skill") or tName:find("slash") or tName:find("swing") or tName:find("punch") or tName:find("hit") then
+                                                        shouldParry = true
+                                                        break
+                                                    end
+                                                end
+                                            end
+                                        end
+                                    end
+                                    if shouldParry then break end
                                 end
                             end
-                            if shouldGuard then break end
                         end
                     end
                 end
                 
-                if shouldGuard then
+                if shouldParry then
                     if keypress then
                         pcall(function()
                             if setrobloxinput then setrobloxinput(true) end
                             keypress(102)
                             keypress(70)
                         end)
-                    end
-                else
-                    if keyrelease then
-                        pcall(function()
-                            keyrelease(102)
-                            keyrelease(70)
-                        end)
+                        task.wait(0.22)
+                        if keyrelease then
+                            pcall(function()
+                                keyrelease(102)
+                                keyrelease(70)
+                            end)
+                        end
                     end
                 end
             end
         end
-        task.wait(0.15)
+        task.wait(0.08)
     end
 end)
 
@@ -1353,6 +2304,23 @@ task.spawn(function()
             local char = lp.Character
             local hum = char and char:FindFirstChildOfClass("Humanoid")
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            
+            if not hum or hum.Health <= 0 or not hrp then
+                repeat
+                    task.wait(0.2)
+                    char = lp.Character
+                    hum = char and char:FindFirstChildOfClass("Humanoid")
+                    hrp = char and char:FindFirstChild("HumanoidRootPart")
+                until char and hum and hum.Health > 0 and hrp
+                task.wait(0.6)
+                local dest = getEntityLocation(State.SelectedMob)
+                smartTeleportToEntity(State.SelectedMob, dest)
+                task.wait(1.0)
+            end
+            
+            char = lp.Character
+            hum = char and char:FindFirstChildOfClass("Humanoid")
+            hrp = char and char:FindFirstChild("HumanoidRootPart")
             
             if hum and hrp and hum.Health > 0 then
                 local targets = getTargets(State.SelectedMob)
@@ -1369,14 +2337,11 @@ task.spawn(function()
                 
                 if target and target.Humanoid.Health > 0 then
                     local style = getEquippedStyle()
-                    if State.AutoParry and keypress then
-                        pcall(function()
-                            if setrobloxinput then setrobloxinput(true) end
-                            keypress(102)
-                            keypress(70)
-                        end)
-                    end
                     while State.Running and State.AutoFarmMobs and target.Humanoid and target.Humanoid.Health > 0 do
+                        if not hum or hum.Health <= 0 or not char.Parent then
+                            break
+                        end
+                        
                         local tRoot = target.Root
                         local tPos = tRoot.Position
                         
@@ -1384,19 +2349,21 @@ task.spawn(function()
                             local headPos = tPos + Vector3.new(0, State.MobHeightOffset or 3.8, 0)
                             hrp.CFrame = CFrame.lookAt(headPos, tPos)
                         elseif State.MobDefenseMode == "Sky God-Hover (Directly Above)" then
-                            local skyPos = tPos + Vector3.new(0, 10.0, 0)
+                            local hoverH = State.SkyHoverHeight or 3.8
+                            local skyPos = tPos + Vector3.new(0, hoverH, 0)
                             hrp.CFrame = CFrame.lookAt(skyPos, tPos)
                         else
                             local behindPos = (tRoot.CFrame * CFrame.new(0, 0.8, State.MobBehindDistance or 2.4)).Position
                             hrp.CFrame = CFrame.lookAt(behindPos, tPos)
                         end
-                        hrp.AssemblyLinearVelocity = Vector3.zero
+                        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                         
                         pcall(function()
                             char:SetAttribute("last_cmbat", 0)
+                            target.Model:SetAttribute("last_cmbat", 0)
                         end)
                         
-                        local hitCount = State.FastAttack and (State.FastAttackBurst or 3) or 1
+                        local hitCount = State.DamageMultiplier or (State.FastAttack and (State.FastAttackBurst or 4)) or 1
                         for _ = 1, hitCount do
                             if RemoteEvent then
                                 RemoteEvent:FireServer("Combat_Service", style, combo, false, 0, false, nil)
@@ -1411,24 +2378,16 @@ task.spawn(function()
                             task.wait()
                         end
                     end
-                    if State.AutoParry and keyrelease then
-                        pcall(function()
-                            keyrelease(102)
-                            keyrelease(70)
-                        end)
-                    end
                 else
-                    local spawnPos = RegionSpawns[State.SelectedMob]
-                    if spawnPos then
-                        smartTeleportToEntity(State.SelectedMob, spawnPos)
-                        task.wait(1.0)
-                    else
-                        task.wait(0.3)
-                    end
+                    local spawnPos = getEntityLocation(State.SelectedMob)
+                    smartTeleportToEntity(State.SelectedMob, spawnPos)
+                    task.wait(0.8)
                 end
             end
+        else
+            task.wait(0.2)
         end
-        task.wait(0.05)
+        task.wait(0.04)
     end
 end)
 
@@ -1440,10 +2399,27 @@ task.spawn(function()
             local hum = char and char:FindFirstChildOfClass("Humanoid")
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
             
+            if not hum or hum.Health <= 0 or not hrp then
+                repeat
+                    task.wait(0.2)
+                    char = lp.Character
+                    hum = char and char:FindFirstChildOfClass("Humanoid")
+                    hrp = char and char:FindFirstChild("HumanoidRootPart")
+                until char and hum and hum.Health > 0 and hrp
+                task.wait(0.6)
+                local dest = getEntityLocation(State.SelectedBoss)
+                smartTeleportToEntity(State.SelectedBoss, dest)
+                task.wait(1.0)
+            end
+            
+            char = lp.Character
+            hum = char and char:FindFirstChildOfClass("Humanoid")
+            hrp = char and char:FindFirstChild("HumanoidRootPart")
+            
             if hum and hrp and hum.Health > 0 then
                 if State.HealthSafeguard and hum.Health < hum.MaxHealth * 0.6 then
                     hrp.CFrame = hrp.CFrame + Vector3.new(0, 50, 0)
-                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                     while State.Running and State.AutoFarmBoss and hum.Health < hum.MaxHealth * 0.95 do
                         task.wait(0.5)
                     end
@@ -1462,18 +2438,15 @@ task.spawn(function()
                 
                 if target and target.Humanoid.Health > 0 then
                     local style = getEquippedStyle()
-                    if State.AutoParry and keypress then
-                        pcall(function()
-                            if setrobloxinput then setrobloxinput(true) end
-                            keypress(102)
-                            keypress(70)
-                        end)
-                    end
                     
                     while State.Running and State.AutoFarmBoss and target.Humanoid and target.Humanoid.Health > 0 do
+                        if not hum or hum.Health <= 0 or not char.Parent then
+                            break
+                        end
+                        
                         if State.HealthSafeguard and hum.Health < hum.MaxHealth * 0.6 then
                             hrp.CFrame = hrp.CFrame + Vector3.new(0, 50, 0)
-                            hrp.AssemblyLinearVelocity = Vector3.zero
+                            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                             while State.Running and State.AutoFarmBoss and hum.Health < hum.MaxHealth * 0.95 do
                                 task.wait(0.5)
                             end
@@ -1484,22 +2457,24 @@ task.spawn(function()
                         local bPos = bRoot.Position
                         
                         if State.DefenseMode == "Head-Stomp (Directly on Top)" then
-                            local headPos = bPos + Vector3.new(0, State.BossHeightOffset or 4.0, 0)
+                            local headPos = bPos + Vector3.new(0, State.BossHeightOffset or 3.8, 0)
                             hrp.CFrame = CFrame.lookAt(headPos, bPos)
                         elseif State.DefenseMode == "Sky God-Hover (Directly Above)" then
-                            local skyPos = bPos + Vector3.new(0, 12.0, 0)
+                            local hoverH = State.SkyHoverHeight or 3.8
+                            local skyPos = bPos + Vector3.new(0, hoverH, 0)
                             hrp.CFrame = CFrame.lookAt(skyPos, bPos)
                         else
                             local behindPos = (bRoot.CFrame * CFrame.new(0, 1.0, State.BossBehindDistance or 2.6)).Position
                             hrp.CFrame = CFrame.lookAt(behindPos, bPos)
                         end
-                        hrp.AssemblyLinearVelocity = Vector3.zero
+                        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                         
                         pcall(function()
                             char:SetAttribute("last_cmbat", 0)
+                            target.Model:SetAttribute("last_cmbat", 0)
                         end)
                         
-                        local hitCount = State.FastAttack and (State.FastAttackBurst or 4) or 1
+                        local hitCount = State.DamageMultiplier or (State.FastAttack and (State.FastAttackBurst or 4)) or 1
                         for _ = 1, hitCount do
                             if RemoteEvent then
                                 RemoteEvent:FireServer("Combat_Service", style, combo, false, 0, false, nil)
@@ -1514,21 +2489,10 @@ task.spawn(function()
                             task.wait()
                         end
                     end
-                    
-                    if State.AutoParry and keyrelease then
-                        pcall(function()
-                            keyrelease(102)
-                            keyrelease(70)
-                        end)
-                    end
                 else
-                    local spawnPos = RegionSpawns[State.SelectedBoss]
-                    if spawnPos then
-                        smartTeleportToEntity(State.SelectedBoss, spawnPos)
-                        task.wait(1.0)
-                    else
-                        task.wait(0.3)
-                    end
+                    local spawnPos = getEntityLocation(State.SelectedBoss)
+                    smartTeleportToEntity(State.SelectedBoss, spawnPos)
+                    task.wait(0.8)
                 end
             end
         else
@@ -1544,6 +2508,20 @@ task.spawn(function()
             local char = lp.Character
             local hum = char and char:FindFirstChildOfClass("Humanoid")
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            
+            if not hum or hum.Health <= 0 or not hrp then
+                repeat
+                    task.wait(0.2)
+                    char = lp.Character
+                    hum = char and char:FindFirstChildOfClass("Humanoid")
+                    hrp = char and char:FindFirstChild("HumanoidRootPart")
+                until char and hum and hum.Health > 0 and hrp
+                task.wait(0.6)
+            end
+            
+            char = lp.Character
+            hum = char and char:FindFirstChildOfClass("Humanoid")
+            hrp = char and char:FindFirstChild("HumanoidRootPart")
             
             if hum and hrp and hum.Health > 0 then
                 local activeQ = getActiveQuest()
@@ -1607,14 +2585,11 @@ task.spawn(function()
                         
                         if target and target.Humanoid.Health > 0 then
                             local style = getEquippedStyle()
-                            if State.AutoParry and keypress then
-                                pcall(function()
-                                    if setrobloxinput then setrobloxinput(true) end
-                                    keypress(102)
-                                    keypress(70)
-                                end)
-                            end
                             while State.Running and State.AutoQuestTasks and target.Humanoid and target.Humanoid.Health > 0 do
+                                if not hum or hum.Health <= 0 or not char.Parent then
+                                    break
+                                end
+                                
                                 local currentQ = getActiveQuest()
                                 if currentQ and currentQ.Complete then break end
                                 
@@ -1624,19 +2599,21 @@ task.spawn(function()
                                     local headPos = tPos + Vector3.new(0, State.MobHeightOffset or 3.8, 0)
                                     hrp.CFrame = CFrame.lookAt(headPos, tPos)
                                 elseif State.MobDefenseMode == "Sky God-Hover (Directly Above)" then
-                                    local skyPos = tPos + Vector3.new(0, 10.0, 0)
+                                    local hoverH = State.SkyHoverHeight or 3.8
+                                    local skyPos = tPos + Vector3.new(0, hoverH, 0)
                                     hrp.CFrame = CFrame.lookAt(skyPos, tPos)
                                 else
                                     local behindPos = (tRoot.CFrame * CFrame.new(0, 0.8, State.MobBehindDistance or 2.4)).Position
                                     hrp.CFrame = CFrame.lookAt(behindPos, tPos)
                                 end
-                                hrp.AssemblyLinearVelocity = Vector3.zero
+                                hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
                                 
                                 pcall(function()
                                     char:SetAttribute("last_cmbat", 0)
+                                    target.Model:SetAttribute("last_cmbat", 0)
                                 end)
                                 
-                                local hitCount = State.FastAttack and (State.FastAttackBurst or 3) or 1
+                                local hitCount = State.DamageMultiplier or (State.FastAttack and (State.FastAttackBurst or 4)) or 1
                                 for _ = 1, hitCount do
                                     if RemoteEvent then
                                         RemoteEvent:FireServer("Combat_Service", style, combo, false, 0, false, nil)
@@ -1651,20 +2628,10 @@ task.spawn(function()
                                     task.wait()
                                 end
                             end
-                            if State.AutoParry and keyrelease then
-                                pcall(function()
-                                    keyrelease(102)
-                                    keyrelease(70)
-                                end)
-                            end
                         else
-                            local spawnPos = RegionSpawns[targetMob]
-                            if spawnPos then
-                                smartTeleportToEntity(targetMob, spawnPos)
-                                task.wait(1.0)
-                            else
-                                task.wait(0.3)
-                            end
+                            local spawnPos = getEntityLocation(targetMob)
+                            smartTeleportToEntity(targetMob, spawnPos)
+                            task.wait(0.8)
                         end
                     else
                         task.wait(0.5)
@@ -1674,93 +2641,95 @@ task.spawn(function()
         else
             task.wait(0.2)
         end
+        task.wait(0.04)
     end
 end)
 
 task.spawn(function()
-    local trainingSignaler = nil
-    pcall(function()
-        trainingSignaler = ReplicatedStorage:FindFirstChild("Communication")
-            and ReplicatedStorage.Communication:FindFirstChild("ServerAndClient")
-            and ReplicatedStorage.Communication.ServerAndClient:FindFirstChild("Signals")
-            and ReplicatedStorage.Communication.ServerAndClient.Signals:FindFirstChild("training_signaler")
-    end)
-    
     while State.Running do
         if State.AutoCompleteTraining then
             local char = lp.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
             local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            local tr = Workspace:FindFirstChild("Training")
             
-            if hrp and tr then
-                local bestPrompt = nil
-                local bestDist = 25.0
+            if hum and hrp and hum.Health > 0 then
+                local vFolder = getPlayerValues()
+                local trainingVal = vFolder and vFolder:FindFirstChild("Training")
                 
-                for _, station in ipairs(tr:GetChildren()) do
-                    for _, desc in ipairs(station:GetDescendants()) do
-                        if desc:IsA("ProximityPrompt") and desc.Enabled then
-                            local part = desc.Parent
-                            if part and part:IsA("BasePart") then
-                                local d = (part.Position - hrp.Position).Magnitude
-                                if d < bestDist then
-                                    bestDist = d
-                                    bestPrompt = desc
-                                end
+                if trainingVal then
+                    task.wait(0.25)
+                    if RemoteEvent then
+                        RemoteEvent:FireServer("training_signaler", "Stop", true)
+                    end
+                    
+                    local waitTimer = 0
+                    while State.Running and State.AutoCompleteTraining and waitTimer < 2.0 do
+                        if not vFolder:FindFirstChild("Training") then break end
+                        task.wait(0.1)
+                        waitTimer = waitTimer + 0.1
+                    end
+                    
+                    while State.Running and State.AutoCompleteTraining and vFolder:FindFirstChild("pause_gameplay") do
+                        task.wait(0.3)
+                    end
+                    task.wait(0.4)
+                else
+                    local prompt, pPart = findNearestTrainingPrompt(hrp, 40.0)
+                    
+                    if not prompt or not pPart then
+                        local targetWorkout = SelectedWorkout or "Boulder Split (Attack Power)"
+                        local workoutPos = WorkoutTeleports[targetWorkout] or Vector3.new(-1041.4, 1131.0, -589.3)
+                        hrp.CFrame = CFrame.new(workoutPos.X, workoutPos.Y + 2.0, workoutPos.Z)
+                        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        task.wait(0.8)
+                        prompt, pPart = findNearestTrainingPrompt(hrp, 40.0)
+                    end
+                    
+                    if pPart then
+                        local targetPos = pPart.Position + Vector3.new(0, 1.2, 2.0)
+                        hrp.CFrame = CFrame.lookAt(targetPos, pPart.Position)
+                        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        task.wait(0.15)
+                        
+                        if setrobloxinput then setrobloxinput(true) end
+                        if keypress then
+                            keypress(84)
+                        end
+                        
+                        local holdTime = 0
+                        while State.Running and State.AutoCompleteTraining and holdTime < 2.2 do
+                            task.wait(0.1)
+                            holdTime = holdTime + 0.1
+                            if vFolder and vFolder:FindFirstChild("Training") then
+                                break
+                            end
+                        end
+                        
+                        if keyrelease then
+                            keyrelease(84)
+                        end
+                        
+                        if vFolder and vFolder:FindFirstChild("Training") then
+                            task.wait(0.25)
+                            if RemoteEvent then
+                                RemoteEvent:FireServer("training_signaler", "Stop", true)
+                            end
+                            
+                            local waitTimer = 0
+                            while State.Running and State.AutoCompleteTraining and waitTimer < 2.0 do
+                                if not vFolder:FindFirstChild("Training") then break end
+                                task.wait(0.1)
+                                waitTimer = waitTimer + 0.1
+                            end
+                            
+                            while State.Running and State.AutoCompleteTraining and vFolder:FindFirstChild("pause_gameplay") do
+                                task.wait(0.3)
                             end
                         end
                     end
                 end
-                
-                if bestPrompt then
-                    local pPart = bestPrompt.Parent
-                    if pPart and pPart:IsA("BasePart") then
-                        hrp.CFrame = CFrame.new(pPart.Position + Vector3.new(0, 1.5, 2.5), pPart.Position)
-                        hrp.AssemblyLinearVelocity = Vector3.zero
-                    end
-                    task.wait(0.1)
-                    
-                    local fired = false
-                    if fireproximityprompt then
-                        pcall(function()
-                            fireproximityprompt(bestPrompt)
-                            fired = true
-                        end)
-                    end
-                    
-                    if not fired and (keypress and keyrelease) then
-                        pcall(function()
-                            if setrobloxinput then setrobloxinput(true) end
-                        end)
-                        local holdTime = (bestPrompt.HoldDuration and bestPrompt.HoldDuration > 0) and (bestPrompt.HoldDuration + 0.15) or 0.8
-                        pcall(function()
-                            keypress(116)
-                            keypress(84)
-                        end)
-                        task.wait(holdTime)
-                        pcall(function()
-                            keyrelease(116)
-                            keyrelease(84)
-                        end)
-                    end
-                    
-                    local timer = 0
-                    while State.Running and State.AutoCompleteTraining and timer < 3.0 do
-                        local pg = lp:FindFirstChild("PlayerGui")
-                        local tGui = pg and (pg:FindFirstChild("Training") or pg:FindFirstChild("Minigame") or pg:FindFirstChild("QTE") or pg:FindFirstChild("Workout"))
-                        if tGui and tGui.Enabled then break end
-                        task.wait(0.2)
-                        timer = timer + 0.2
-                    end
-                end
             end
-            
-            if trainingSignaler then
-                pcall(function()
-                    trainingSignaler:FireServer(100, true)
-                end)
-            end
-            
-            task.wait(0.5)
+            task.wait(0.4)
         else
             task.wait(0.5)
         end
