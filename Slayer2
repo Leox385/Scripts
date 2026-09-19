@@ -543,23 +543,76 @@ local function getActiveQuest()
     return nil
 end
 
+local function isPlayerModel(m)
+    if not m then return true end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Character == m or p.Name == m.Name then return true end
+    end
+    return false
+end
+
 local function resetHitboxes()
-    local reg = Workspace:FindFirstChild("Humanoids") and Workspace.Humanoids:FindFirstChild("Regions")
-    if reg then
-        for _, r in ipairs(reg:GetChildren()) do
-            local active = r:FindFirstChild("ActiveNpcs")
-            if active then
-                for _, item in ipairs(active:GetChildren()) do
-                    local m = item:FindFirstChildOfClass("Model") or (item.ClassName == "Model" and item)
-                    if not m then
-                        for _, s in ipairs(item:GetChildren()) do
-                            if s.ClassName == "Model" then m = s break end
+    local defaultSizes = {
+        HumanoidRootPart = { size = Vector3.new(2, 2, 1), canCollide = false },
+        UpperTorso = { size = Vector3.new(1.7, 1.6, 0.9), canCollide = true },
+        LowerTorso = { size = Vector3.new(1.7, 0.4, 0.9), canCollide = true },
+        Torso = { size = Vector3.new(2, 2, 1), canCollide = true },
+        Head = { size = Vector3.new(2, 1, 1), canCollide = false },
+        Hitbox = { size = Vector3.new(2, 2, 1), canCollide = false }
+    }
+    local function resetSingleModel(m)
+        for partName, def in pairs(defaultSizes) do
+            local p = m:FindFirstChild(partName)
+            if p and (p.ClassName == "Part" or p.ClassName == "MeshPart") then
+                p.Size = def.size
+                p.CanCollide = def.canCollide
+            end
+        end
+        for _, ch in ipairs(m:GetChildren()) do
+            if (ch.ClassName == "Part" or ch.ClassName == "MeshPart") and ch.Name:lower():find("hitbox") then
+                ch.Size = Vector3.new(2, 2, 1)
+                ch.CanCollide = false
+            end
+        end
+    end
+    local hums = Workspace:FindFirstChild("Humanoids")
+    if hums then
+        local reg = hums:FindFirstChild("Regions")
+        if reg then
+            for _, r in ipairs(reg:GetChildren()) do
+                local active = r:FindFirstChild("ActiveNpcs")
+                if active then
+                    for _, item in ipairs(active:GetChildren()) do
+                        local m = item:FindFirstChildOfClass("Model") or (item.ClassName == "Model" and item)
+                        if not m then
+                            for _, s in ipairs(item:GetChildren()) do
+                                if s.ClassName == "Model" then m = s break end
+                            end
+                        end
+                        if m and not isPlayerModel(m) then
+                            resetSingleModel(m)
                         end
                     end
-                    if m then
-                        local root = m:FindFirstChild("HumanoidRootPart")
-                        if root then
-                            root.Size = Vector3.new(2, 2, 1)
+                end
+            end
+        end
+    end
+    local deb = Workspace:FindFirstChild("Debree")
+    if deb then
+        local dReg = deb:FindFirstChild("Regions")
+        if dReg then
+            for _, r in ipairs(dReg:GetChildren()) do
+                local active = r:FindFirstChild("ActiveNpcs")
+                if active then
+                    for _, item in ipairs(active:GetChildren()) do
+                        local m = item:FindFirstChildOfClass("Model") or (item.ClassName == "Model" and item)
+                        if not m then
+                            for _, s in ipairs(item:GetChildren()) do
+                                if s.ClassName == "Model" then m = s break end
+                            end
+                        end
+                        if m and not isPlayerModel(m) then
+                            resetSingleModel(m)
                         end
                     end
                 end
@@ -1142,29 +1195,71 @@ task.spawn(function()
     end
 end)
 
+local targetHitboxParts = {"HumanoidRootPart", "UpperTorso", "LowerTorso", "Torso", "Head", "Hitbox"}
+
+local function expandModelHitbox(m, size)
+    local hum = m:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health <= 0 then return end
+    for _, partName in ipairs(targetHitboxParts) do
+        local p = m:FindFirstChild(partName)
+        if p and (p.ClassName == "Part" or p.ClassName == "MeshPart") then
+            if p.Size.X ~= size then
+                p.Size = Vector3.new(size, size, size)
+                p.CanCollide = false
+            end
+        end
+    end
+    for _, ch in ipairs(m:GetChildren()) do
+        if (ch.ClassName == "Part" or ch.ClassName == "MeshPart") and ch.Name:lower():find("hitbox") then
+            if ch.Size.X ~= size then
+                ch.Size = Vector3.new(size, size, size)
+                ch.CanCollide = false
+            end
+        end
+    end
+end
+
 task.spawn(function()
     while State.Running do
         if State.HitboxExpander then
-            local reg = Workspace:FindFirstChild("Humanoids") and Workspace.Humanoids:FindFirstChild("Regions")
-            if reg then
-                for _, r in ipairs(reg:GetChildren()) do
-                    local active = r:FindFirstChild("ActiveNpcs")
-                    if active then
-                        for _, item in ipairs(active:GetChildren()) do
-                            local m = item:FindFirstChildOfClass("Model") or (item.ClassName == "Model" and item)
-                            if not m then
-                                for _, s in ipairs(item:GetChildren()) do
-                                    if s.ClassName == "Model" then m = s break end
+            local hums = Workspace:FindFirstChild("Humanoids")
+            if hums then
+                local reg = hums:FindFirstChild("Regions")
+                if reg then
+                    for _, r in ipairs(reg:GetChildren()) do
+                        local active = r:FindFirstChild("ActiveNpcs")
+                        if active then
+                            for _, item in ipairs(active:GetChildren()) do
+                                local m = item:FindFirstChildOfClass("Model") or (item.ClassName == "Model" and item)
+                                if not m then
+                                    for _, s in ipairs(item:GetChildren()) do
+                                        if s.ClassName == "Model" then m = s break end
+                                    end
+                                end
+                                if m and not isPlayerModel(m) then
+                                    expandModelHitbox(m, State.HitboxSize)
                                 end
                             end
-                            if m then
-                                local root = m:FindFirstChild("HumanoidRootPart")
-                                local hum = m:FindFirstChildOfClass("Humanoid")
-                                if root and hum and hum.Health > 0 then
-                                    if root.Size.X ~= State.HitboxSize then
-                                        root.Size = Vector3.new(State.HitboxSize, State.HitboxSize, State.HitboxSize)
-                                        root.CanCollide = false
+                        end
+                    end
+                end
+            end
+            local deb = Workspace:FindFirstChild("Debree")
+            if deb then
+                local dReg = deb:FindFirstChild("Regions")
+                if dReg then
+                    for _, r in ipairs(dReg:GetChildren()) do
+                        local active = r:FindFirstChild("ActiveNpcs")
+                        if active then
+                            for _, item in ipairs(active:GetChildren()) do
+                                local m = item:FindFirstChildOfClass("Model") or (item.ClassName == "Model" and item)
+                                if not m then
+                                    for _, s in ipairs(item:GetChildren()) do
+                                        if s.ClassName == "Model" then m = s break end
                                     end
+                                end
+                                if m and not isPlayerModel(m) then
+                                    expandModelHitbox(m, State.HitboxSize)
                                 end
                             end
                         end
