@@ -974,4 +974,330 @@ task.spawn(function()
                     end
                 end
                 
-                if target and target.Humanoid.Health >
+                if target and target.Humanoid.Health > 0 then
+                    local style = getEquippedStyle()
+                    while State.Running and State.AutoFarmMobs and target.Humanoid and target.Humanoid.Health > 0 do
+                        local tPos = target.Root.Position
+                        hrp.CFrame = CFrame.lookAt(tPos + Vector3.new(0, State.MobHeightOffset, 0), tPos)
+                        hrp.AssemblyLinearVelocity = Vector3.zero
+                        
+                        if RemoteEvent then
+                            RemoteEvent:FireServer("Combat_Service", style, combo, false, 0, false, nil)
+                        end
+                        if mouse1click then mouse1click() end
+                        combo = combo % 5 + 1
+                        task.wait(State.MobAttackDelay)
+                    end
+                else
+                    local spawnPos = RegionSpawns[State.SelectedMob]
+                    if spawnPos then
+                        safeTeleport(spawnPos)
+                        task.wait(1.2)
+                    else
+                        task.wait(0.5)
+                    end
+                end
+            end
+        end
+        task.wait(0.1)
+    end
+end)
+
+task.spawn(function()
+    local combo = 1
+    while State.Running do
+        if State.AutoFarmBoss then
+            local char = lp.Character
+            local hum = char and char:FindFirstChildOfClass("Humanoid")
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            
+            if hum and hrp and hum.Health > 0 then
+                if State.HealthSafeguard and hum.Health < hum.MaxHealth * 0.5 then
+                    hrp.CFrame = hrp.CFrame + Vector3.new(0, 45, 0)
+                    hrp.AssemblyLinearVelocity = Vector3.zero
+                    while State.Running and State.AutoFarmBoss and hum.Health < hum.MaxHealth * 0.9 do
+                        task.wait(1.0)
+                    end
+                end
+                
+                local targets = getTargets(State.SelectedBoss)
+                local target = nil
+                
+                local bestDist = math.huge
+                for _, t in ipairs(targets) do
+                    local d = (t.Root.Position - hrp.Position).Magnitude
+                    if d < bestDist then
+                        bestDist = d
+                        target = t
+                    end
+                end
+                
+                if target and target.Humanoid.Health > 0 then
+                    local style = getEquippedStyle()
+                    
+                    if State.AutoParry and keypress then
+                        pcall(function() keypress(Enum.KeyCode.F.Value) end)
+                    end
+                    
+                    while State.Running and State.AutoFarmBoss and target.Humanoid and target.Humanoid.Health > 0 do
+                        if State.HealthSafeguard and hum.Health < hum.MaxHealth * 0.5 then
+                            hrp.CFrame = hrp.CFrame + Vector3.new(0, 45, 0)
+                            hrp.AssemblyLinearVelocity = Vector3.zero
+                            while State.Running and State.AutoFarmBoss and hum.Health < hum.MaxHealth * 0.9 do
+                                task.wait(1.0)
+                            end
+                            break
+                        end
+                        
+                        local bRoot = target.Root
+                        local bPos = bRoot.Position
+                        
+                        if State.DefenseMode == "Sky God-Hover (Directly Above)" then
+                            local skyPos = bPos + Vector3.new(0, State.BossHeightOffset, 0)
+                            hrp.CFrame = CFrame.lookAt(skyPos, bPos)
+                        else
+                            local behindPos = (bRoot.CFrame * CFrame.new(0, State.BossHeightOffset, State.BossBehindDistance)).Position
+                            hrp.CFrame = CFrame.lookAt(behindPos, bPos)
+                        end
+                        hrp.AssemblyLinearVelocity = Vector3.zero
+                        
+                        if RemoteEvent then
+                            RemoteEvent:FireServer("Combat_Service", style, combo, false, 0, false, nil)
+                        end
+                        if mouse1click then mouse1click() end
+                        combo = combo % 5 + 1
+                        task.wait(State.BossAttackDelay)
+                    end
+                    
+                    if State.AutoParry and keyrelease then
+                        pcall(function() keyrelease(Enum.KeyCode.F.Value) end)
+                    end
+                else
+                    local spawnPos = RegionSpawns[State.SelectedBoss]
+                    if spawnPos then
+                        safeTeleport(spawnPos)
+                        task.wait(1.2)
+                    else
+                        task.wait(0.5)
+                    end
+                end
+            end
+        else
+            task.wait(0.2)
+        end
+    end
+end)
+
+task.spawn(function()
+    local combo = 1
+    local lastNotifiedComplete = nil
+    
+    while State.Running do
+        if State.AutoQuestTasks then
+            local activeQ = getActiveQuest()
+            local qData = QuestRegistry[State.SelectedQuest]
+            
+            if activeQ then
+                if activeQ.Complete then
+                    if lastNotifiedComplete ~= activeQ.Name then
+                        lastNotifiedComplete = activeQ.Name
+                        UI:Notify({
+                            Title = "Quest Objectives Done!",
+                            Content = tostring(activeQ.Name),
+                            Type = "success",
+                            Duration = 4
+                        })
+                        
+                        if State.QuestReturnAfter and qData and qData.NpcPos then
+                            safeTeleport(qData.NpcPos)
+                            State.AutoQuestTasks = false
+                        end
+                    end
+                    task.wait(1.5)
+                else
+                    lastNotifiedComplete = nil
+                    
+                    local targetMob = nil
+                    if qData and not qData.AutoDetect and qData.TargetEnemy then
+                        targetMob = qData.TargetEnemy
+                    end
+                    
+                    if not targetMob then
+                        local qNameLower = activeQ.Name:lower()
+                        for _, t in ipairs(activeQ.Tasks) do
+                            if t.Value < t.Max then
+                                local tLower = t.Name:lower()
+                                if tLower:find("bandit") or qNameLower:find("bandit") or qNameLower:find("krue") then
+                                    targetMob = "Bandit"
+                                elseif tLower:find("zuko") or qNameLower:find("zuko") then
+                                    targetMob = "Zuko"
+                                elseif tLower:find("mizunoto") or qNameLower:find("niko") or tLower:find("blade") then
+                                    targetMob = "Mizunoto"
+                                elseif tLower:find("bear") or qNameLower:find("lucy") or tLower:find("meat") then
+                                    targetMob = "Mother Bear"
+                                elseif tLower:find("ice") or tLower:find("profound") then
+                                    targetMob = "Ice Profound Demon"
+                                elseif tLower:find("fire") then
+                                    targetMob = "Fire Profound Demon"
+                                elseif tLower:find("high demon") then
+                                    targetMob = "High Demon"
+                                elseif tLower:find("demon") or qNameLower:find("shiori") then
+                                    targetMob = "Lesser Demon"
+                                elseif tLower:find("mizunoe") then
+                                    targetMob = "Mizunoe Demon Slayer"
+                                elseif tLower:find("kanoe") then
+                                    targetMob = "Kanoe Demon Slayer"
+                                end
+                                if targetMob then break end
+                            end
+                        end
+                    end
+                    
+                    if not targetMob then targetMob = "Bandit" end
+                    
+                    local char = lp.Character
+                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                    
+                    if hum and hrp and hum.Health > 0 then
+                        local targets = getTargets(targetMob)
+                        if #targets == 0 and qData and qData.AltTarget then
+                            targets = getTargets(qData.AltTarget)
+                        end
+                        
+                        local target = nil
+                        local bestDist = math.huge
+                        for _, t in ipairs(targets) do
+                            local d = (t.Root.Position - hrp.Position).Magnitude
+                            if d < bestDist then
+                                bestDist = d
+                                target = t
+                            end
+                        end
+                        
+                        if target and target.Humanoid.Health > 0 then
+                            local style = getEquippedStyle()
+                            while State.Running and State.AutoQuestTasks and target.Humanoid and target.Humanoid.Health > 0 do
+                                local currentQ = getActiveQuest()
+                                if currentQ and currentQ.Complete then break end
+                                
+                                local tPos = target.Root.Position
+                                hrp.CFrame = CFrame.lookAt(tPos + Vector3.new(0, State.MobHeightOffset, 0), tPos)
+                                hrp.AssemblyLinearVelocity = Vector3.zero
+                                
+                                if RemoteEvent then
+                                    RemoteEvent:FireServer("Combat_Service", style, combo, false, 0, false, nil)
+                                end
+                                if mouse1click then mouse1click() end
+                                combo = combo % 5 + 1
+                                task.wait(State.MobAttackDelay)
+                            end
+                        else
+                            local spawnPos = RegionSpawns[targetMob]
+                            if spawnPos then
+                                safeTeleport(spawnPos)
+                                task.wait(1.2)
+                            else
+                                task.wait(0.5)
+                            end
+                        end
+                    end
+                end
+            else
+                task.wait(1.0)
+            end
+        else
+            task.wait(0.3)
+        end
+    end
+end)
+
+task.spawn(function()
+    local combo = 1
+    while State.Running do
+        if State.FastAttack and not State.AutoFarmMobs and not State.AutoFarmBoss and not State.AutoQuestTasks then
+            local style = getEquippedStyle()
+            if RemoteEvent then
+                RemoteEvent:FireServer("Combat_Service", style, combo, false, 0, false, nil)
+            end
+            if mouse1click then mouse1click() end
+            combo = combo % 5 + 1
+            task.wait(0.1)
+        else
+            task.wait(0.2)
+        end
+    end
+end)
+
+task.spawn(function()
+    local playerValues = ReplicatedStorage:FindFirstChild("Player_Service")
+        and ReplicatedStorage.Player_Service:FindFirstChild("Values")
+        and ReplicatedStorage.Player_Service.Values:FindFirstChild(lp.Name)
+        
+    while State.Running do
+        if State.AutoCompleteTraining and playerValues then
+            local tr = playerValues:FindFirstChild("Training")
+            if tr then
+                task.wait(0.3)
+                if RemoteEvent then
+                    RemoteEvent:FireServer("training_signaler", "Stop", true)
+                end
+                task.wait(1)
+            end
+        end
+        task.wait(0.4)
+    end
+end)
+
+task.spawn(function()
+    local skillKeys = {
+        Enum.KeyCode.Z.Value,
+        Enum.KeyCode.X.Value,
+        Enum.KeyCode.C.Value,
+        Enum.KeyCode.V.Value,
+        Enum.KeyCode.B.Value
+    }
+    while State.Running do
+        if State.AutoSpamSkills then
+            for _, k in ipairs(skillKeys) do
+                if not State.Running or not State.AutoSpamSkills then break end
+                if keypress and keyrelease then
+                    keypress(k)
+                    task.wait(0.05)
+                    keyrelease(k)
+                end
+                task.wait(0.2)
+            end
+            task.wait(State.SkillSpamInterval)
+        else
+            task.wait(0.5)
+        end
+    end
+end)
+
+task.spawn(function()
+    while State.Running do
+        local char = lp.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum and State.WalkSpeed > 16 and hum.WalkSpeed ~= State.WalkSpeed then
+                hum.WalkSpeed = State.WalkSpeed
+            end
+            if State.NoClip then
+                for _, p in ipairs(char:GetChildren()) do
+                    if p:IsA("BasePart") and p.Name ~= "HumanoidRootPart" then
+                        p.CanCollide = false
+                    end
+                end
+            end
+        end
+        task.wait(0.2)
+    end
+end)
+
+UI:Notify({
+    Title = "Slayers 2 Hub",
+    Content = "Loaded successfully!",
+    Type = "success",
+    Duration = 3
+})
