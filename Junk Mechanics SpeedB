@@ -1,0 +1,228 @@
+if _G.CarSpeedModCleanup then
+pcall(_G.CarSpeedModCleanup)
+end
+local _0x8088 = game:GetService("Players")
+local _0xC6FB = game:GetService("UserInputService")
+local _0x63FB = _0x8088.LocalPlayer
+local _0x136E, _0x775E = pcall(function()
+return httpget("https://raw.githubusercontent.com/9mfg/rem-ui/main/rem.lua")
+end)
+if not _0x136E or not _0x775E then
+_0x775E = game:HttpGet("https://raw.githubusercontent.com/9mfg/rem-ui/main/rem.lua")
+end
+loadstring(_0x775E)()
+local _0xFC10 = Rem or _G.Rem or getfenv().Rem
+assert(_0xFC10 and _0xFC10.Alive,"Failed to load REM UI")
+local _0x7442 = {
+Enabled = true,
+TargetSpeed = 400,
+AccelRate = 180,
+InstantMode = false,
+BrakeAssist = true,
+StabilityAssist = true,
+Running = true
+}
+local _0xEFFF = 1.008
+local function _0x8FDB()
+local _0x0DD3 = _0x63FB.Character
+local _0xF715 = _0x0DD3 and _0x0DD3:FindFirstChild("HumanoidRootPart")
+if not _0xF715 then return nil end
+local _0xC699 = workspace:FindFirstChild("Vehicles")
+if not _0xC699 then return nil end
+local _0x6D79 = _0xC699:FindFirstChild(tostring(_0x63FB.UserId))
+if _0x6D79 and _0x6D79:FindFirstChild("Seats") and _0x6D79.Seats:FindFirstChild("Drive") then
+if (_0xF715.Position - _0x6D79.Seats.Drive.Position).Magnitude < 5 then
+return _0x6D79
+end
+end
+for _, _0x30FF in ipairs(_0xC699:GetChildren()) do
+local _0x4471 = _0x30FF:FindFirstChild("Seats") and _0x30FF.Seats:FindFirstChild("Drive")
+if _0x4471 and (_0xF715.Position - _0x4471.Position).Magnitude < 5 then
+return _0x30FF
+end
+end
+return nil
+end
+local _0x185F = _0xFC10:AddTab({
+Title ="Vehicle",
+Icon ="script"})
+local _0xEBAB = _0x185F:AddLabel({
+Title ="Telemetry",
+Description ="Vehicle: None | Speed: 0 KM/H"})
+local _0xDD06 = _0x185F:AddToggle({
+Title ="Speed Override",
+Description ="Enable custom speed modifier",
+Default = true,
+Callback = function(val)
+_0x7442.Enabled = val
+_0xFC10:Notify({
+Title ="Speed Override",
+Content = val and string.format("Enabled: %d KM/H", _0x7442.TargetSpeed) or"Disabled",
+Type = val and"success"or"info",
+Duration = 2
+})
+end
+})
+local _0x7035 = _0x185F:AddSlider({
+Title ="Max Speed (KM/H)",
+Description ="Target vehicle speed",
+Min = 100,
+Max = 600,
+Step = 10,
+Default = 400,
+Callback = function(val)
+_0x7442.TargetSpeed = val
+end
+})
+_0x185F:AddDropdown({
+Title ="Acceleration Mode",
+Description ="Acceleration rate",
+Options = {"Fast (+180 km/h/s)","Smooth (+80 km/h/s)","Extreme (+300 km/h/s)","Instant"},
+Default ="Fast (+180 km/h/s)",
+Callback = function(mode)
+if mode =="Instant"then
+_0x7442.InstantMode = true
+elseif mode =="Smooth (+80 km/h/s)"then
+_0x7442.InstantMode = false
+_0x7442.AccelRate = 80
+elseif mode =="Fast (+180 km/h/s)"then
+_0x7442.InstantMode = false
+_0x7442.AccelRate = 180
+elseif mode =="Extreme (+300 km/h/s)"then
+_0x7442.InstantMode = false
+_0x7442.AccelRate = 300
+end
+end
+})
+_0x185F:AddToggle({
+Title ="Brake Assist",
+Description ="Rapid stopping when braking",
+Default = true,
+Callback = function(val)
+_0x7442.BrakeAssist = val
+end
+})
+_0x185F:AddToggle({
+Title ="Stability Assist",
+Description ="Keeps car grounded at high speeds",
+Default = true,
+Callback = function(val)
+_0x7442.StabilityAssist = val
+end
+})
+_0x185F:AddButton({
+Title ="Set to 400 KM/H",
+Description ="Shortcut to 400 KM/H",
+ButtonText ="400 KM/H",
+Callback = function()
+_0x7035:SetValue(400)
+_0x7442.TargetSpeed = 400
+if not _0x7442.Enabled then
+_0xDD06:SetValue(true)
+_0x7442.Enabled = true
+end
+_0xFC10:Notify({
+Title ="Speed",
+Content ="Target set to 400 KM/H",
+Type ="success",
+Duration = 2
+})
+end
+})
+_0x185F:AddButton({
+Title ="Reset to 200 KM/H",
+Description ="Shortcut to factory speed",
+ButtonText ="200 KM/H",
+Callback = function()
+_0x7035:SetValue(200)
+_0x7442.TargetSpeed = 200
+_0xFC10:Notify({
+Title ="Speed",
+Content ="Reset to 200 KM/H",
+Type ="info",
+Duration = 2
+})
+end
+})
+_0x185F:Select()
+task.spawn(function()
+local _0xB478 = os.clock()
+local _0xFE7F = 0
+while _0x7442.Running do
+local _0xA09B = os.clock()
+local _0xF6EC = _0xA09B - _0xB478
+_0xB478 = _0xA09B
+local _0x30FF = _0x8FDB()
+if _0x30FF then
+local _0x53E5 = _0x30FF.PrimaryPart or _0x30FF:FindFirstChild("Primary")
+local _0x4471 = _0x30FF:FindFirstChild("Seats") and _0x30FF.Seats:FindFirstChild("Drive")
+if _0x53E5 then
+local _0x1580 = _0x53E5.AssemblyLinearVelocity
+local _0xA90B
+if _0x4471 then
+_0xA90B = _0x4471.CFrame.LookVector
+else
+_0xA90B = -_0x53E5.CFrame.LookVector
+end
+local _0x64D4 = Vector3.new(_0xA90B.X, 0, _0xA90B.Z)
+if _0x64D4.Magnitude > 0.001 then
+_0x64D4 = _0x64D4.Unit
+else
+_0x64D4 = _0xA90B
+end
+local _0x4D8D = _0x1580:Dot(_0x64D4)
+local _0x6BED = math.max(0, _0x4D8D * _0xEFFF)
+if _0xA09B - _0xFE7F >= 0.25 then
+_0xFE7F = _0xA09B
+_0xEBAB:SetValue(string.format("Car: %s | Speed: %d KM/H | Target: %d KM/H", _0x30FF.Name, math.round(_0x6BED), _0x7442.TargetSpeed))
+end
+if _0x7442.Enabled then
+local _0x5B35 = _0xC6FB:IsKeyDown(119) or _0xC6FB:IsKeyDown(273) or _0xC6FB:IsKeyDown(1005)
+local _0x98B4 = _0xC6FB:IsKeyDown(115) or _0xC6FB:IsKeyDown(274) or _0xC6FB:IsKeyDown(32) or _0xC6FB:IsKeyDown(1004)
+if _0x98B4 and _0x7442.BrakeAssist then
+if _0x6BED > 20 then
+local _0xE702 = (350 / _0xEFFF) * _0xF6EC
+local _0xCBEB = math.min(_0x4D8D, _0xE702)
+_0x53E5.AssemblyLinearVelocity = _0x1580 - _0x64D4 * _0xCBEB
+end
+elseif _0x5B35 then
+local _0x8C80 = _0x7442.TargetSpeed
+local _0x7BB9 = _0x8C80 / _0xEFFF
+if _0x6BED < _0x8C80 then
+if _0x7442.InstantMode then
+_0x53E5.AssemblyLinearVelocity = _0x64D4 * _0x7BB9 + Vector3.new(0, _0x1580.Y, 0)
+else
+local _0x83F1 = _0x7442.AccelRate * _0xF6EC
+local _0x2B8F = math.min(_0x8C80, _0x6BED + _0x83F1)
+local _0x5A6D = (_0x2B8F - _0x6BED) / _0xEFFF
+_0x53E5.AssemblyLinearVelocity = _0x1580 + _0x64D4 * _0x5A6D
+end
+elseif _0x6BED > _0x8C80 + 8 then
+local _0xDFD1 = (_0x6BED - _0x8C80) / _0xEFFF
+local _0x4DCD = math.min(_0xDFD1, (80 / _0xEFFF) * _0xF6EC)
+_0x53E5.AssemblyLinearVelocity = _0x1580 - _0x64D4 * _0x4DCD
+end
+if _0x7442.StabilityAssist and _0x6BED > 180 then
+local _0xCAC8 = _0x53E5.AssemblyLinearVelocity
+if _0xCAC8.Y > 0.5 then
+_0x53E5.AssemblyLinearVelocity = Vector3.new(_0xCAC8.X, math.max(-6, _0xCAC8.Y - 15 * _0xF6EC), _0xCAC8.Z)
+end
+end
+end
+end
+end
+else
+if _0xA09B - _0xFE7F >= 0.5 then
+_0xFE7F = _0xA09B
+_0xEBAB:SetValue("Not driving (enter driver seat)")
+end
+end
+task.wait(0.04)
+end
+end)
+_G.CarSpeedModCleanup = function()
+_0x7442.Running = false
+if _0xFC10 and _0xFC10.Destroy then
+pcall(function() _0xFC10:Destroy() end)
+end
+end
