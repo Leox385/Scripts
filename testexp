@@ -1,6 +1,7 @@
 -- =========================================================================
--- AUTO FARM NIKO <-> SHIORI (LV 70+) WITH FLOATING TOGGLE BUTTON (ON / OFF)
--- 100% Compatible with Matcha Luau Engine
+-- BUCLE INFINITO DE ENTREGA: NIKO -> SHIORI -> NIKO -> REPETIR
+-- 1,000 EXP + 400 Dinero por ciclo
+-- Compatible con Matcha (CFrame corregido y Botón con Drawing)
 -- =========================================================================
 
 local Players = game:GetService("Players")
@@ -10,59 +11,51 @@ local VirtualInputManager = game:GetService("VirtualInputManager")
 local lp = Players.LocalPlayer
 local mouse = lp:GetMouse()
 
--- Global Script State
-_G.State = _G.State or {
-    FullAutoFarm = true,
-    SelectedQuest = "NikoDelivery",
-    AutoQuestTasks = false,
+-- Configuración y Coordenadas
+_G.NikoDeliveryConfig = _G.NikoDeliveryConfig or {
+    Enabled = true,                                     -- Estado del auto-farm
+    NikoPos = Vector3.new(407.3, 875.0, 978.9),         -- Coordenada de Niko (Mistfall Harbor)
+    ShioriPos = Vector3.new(-1814.34, 311.80, -101.07), -- Coordenada de Shiori (Butterfly Estate)
+    InteractDelay = 0.8,
 }
-local State = _G.State
+local Config = _G.NikoDeliveryConfig
 
--- NPC Registry & Default Coordinates
-local QuestRegistry = {
-    ["NikoDelivery"] = {
-        NpcName = "Niko",
-        NpcPos = Vector3.new(407.3, 875.0, 978.9),             -- Niko's location (Mistfall Harbor)
-        TargetNpcName = "Shiori",
-        TargetNpcPos = Vector3.new(-1814.34, 311.80, -101.07), -- Shiori's location (Butterfly Estate)
-    }
-}
-
--- Session Statistics
+-- Estadísticas
 local Stats = {
     Completed = 0,
     ExpEarned = 0,
     MoneyEarned = 0,
+    Phase = "Iniciando..."
 }
 
 -- =========================================================================
--- 1. CLEANUP PREVIOUS UI INSTANCES UPON RE-EXECUTION
+-- 1. LIMPIEZA DE UI PREVIA SI SE RE-EJECUTA
 -- =========================================================================
-if _G.NikoFarmUI then
+if _G.NikoDeliveryUI then
     pcall(function()
-        for _, elem in pairs(_G.NikoFarmUI) do
+        for _, elem in pairs(_G.NikoDeliveryUI) do
             if elem and elem.Remove then elem:Remove() end
         end
     end)
-    if _G.NikoFarmInputConn then
-        pcall(function() _G.NikoFarmInputConn:Disconnect() end)
+    if _G.NikoDeliveryConn then
+        pcall(function() _G.NikoDeliveryConn:Disconnect() end)
     end
-    _G.NikoFarmActive = false
+    _G.NikoDeliveryActive = false
     task.wait(0.1)
 end
-_G.NikoFarmActive = true
+_G.NikoDeliveryActive = true
 
 -- =========================================================================
--- 2. INTERACTIVE FLOATING BUTTON (DRAWING API)
+-- 2. BOTÓN FLOTANTE (ON / OFF)
 -- =========================================================================
 local btnX, btnY = 30, 220
-local btnW, btnH = 210, 60
+local btnW, btnH = 220, 65
 
 local bg = Drawing.new("Square")
 bg.Position = Vector2.new(btnX, btnY)
 bg.Size = Vector2.new(btnW, btnH)
 bg.Filled = true
-bg.Color = State.FullAutoFarm and Color3.fromRGB(40, 160, 60) or Color3.fromRGB(180, 40, 40)
+bg.Color = Config.Enabled and Color3.fromRGB(40, 160, 60) or Color3.fromRGB(180, 40, 40)
 bg.Visible = true
 
 local border = Drawing.new("Square")
@@ -75,58 +68,58 @@ border.Visible = true
 
 local label = Drawing.new("Text")
 label.Position = Vector2.new(btnX + btnW / 2, btnY + 8)
-label.Size = 15
+label.Size = 14
 label.Center = true
 label.Outline = true
 label.Color = Color3.fromRGB(255, 255, 255)
-label.Text = State.FullAutoFarm and "[ ON ] AUTOFARM NIKO" or "[ OFF ] AUTOFARM (PAUSED)"
+label.Text = Config.Enabled and "[ ON ] PAQUETE NIKO <-> SHIORI" or "[ OFF ] FARM PAUSADO"
 label.Visible = true
 
-local sublabel = Drawing.new("Text")
-sublabel.Position = Vector2.new(btnX + btnW / 2, btnY + 26)
-sublabel.Size = 12
-sublabel.Center = true
-sublabel.Outline = true
-sublabel.Color = Color3.fromRGB(220, 220, 220)
-sublabel.Text = "Click or press [K] to toggle"
-sublabel.Visible = true
+local phaseLabel = Drawing.new("Text")
+phaseLabel.Position = Vector2.new(btnX + btnW / 2, btnY + 26)
+phaseLabel.Size = 11
+phaseLabel.Center = true
+phaseLabel.Outline = true
+phaseLabel.Color = Color3.fromRGB(255, 230, 120)
+phaseLabel.Text = "Fase: Esperando inicio..."
+phaseLabel.Visible = true
 
 local statsLabel = Drawing.new("Text")
-statsLabel.Position = Vector2.new(btnX + btnW / 2, btnY + 42)
+statsLabel.Position = Vector2.new(btnX + btnW / 2, btnY + 44)
 statsLabel.Size = 11
 statsLabel.Center = true
 statsLabel.Outline = true
-statsLabel.Color = Color3.fromRGB(255, 220, 100)
-statsLabel.Text = "Quests: 0 | EXP: +0"
+statsLabel.Color = Color3.fromRGB(220, 220, 220)
+statsLabel.Text = "Completadas: 0 | EXP: +0"
 statsLabel.Visible = true
 
-_G.NikoFarmUI = { bg = bg, border = border, label = label, sublabel = sublabel, statsLabel = statsLabel }
+_G.NikoDeliveryUI = { bg = bg, border = border, label = label, phaseLabel = phaseLabel, statsLabel = statsLabel }
 
 local function updateUI()
-    if State.FullAutoFarm then
+    if Config.Enabled then
         bg.Color = Color3.fromRGB(40, 160, 60)
-        label.Text = "[ ON ] AUTOFARM NIKO"
+        label.Text = "[ ON ] PAQUETE NIKO <-> SHIORI"
     else
         bg.Color = Color3.fromRGB(180, 40, 40)
-        label.Text = "[ OFF ] AUTOFARM (PAUSED)"
+        label.Text = "[ OFF ] FARM PAUSADO"
     end
-    statsLabel.Text = string.format("Quests: %d | EXP: +%d", Stats.Completed, Stats.ExpEarned)
+    phaseLabel.Text = "Fase: " .. Stats.Phase
+    statsLabel.Text = string.format("Completadas: %d | EXP: +%d", Stats.Completed, Stats.ExpEarned)
 end
 
 local function toggleFarm()
-    State.FullAutoFarm = not State.FullAutoFarm
+    Config.Enabled = not Config.Enabled
     updateUI()
-    print("[NikoAutoFarm] State:", State.FullAutoFarm and "ACTIVE (ON)" or "PAUSED (OFF)")
+    print("[NikoDelivery] Estado cambiado a:", Config.Enabled and "ACTIVO (ON)" or "PAUSADO (OFF)")
 end
 
--- Mouse click detection on the floating button
+-- Clic con ratón sobre el botón
 task.spawn(function()
-    while _G.NikoFarmActive do
+    while _G.NikoDeliveryActive do
         if ismouse1pressed and ismouse1pressed() then
             local mx, my = mouse.X, mouse.Y
             if mx >= btnX and mx <= (btnX + btnW) and my >= btnY and my <= (btnY + btnH) then
                 toggleFarm()
-                -- Debounce wait until mouse release
                 while ismouse1pressed and ismouse1pressed() do
                     task.wait(0.05)
                 end
@@ -136,8 +129,8 @@ task.spawn(function()
     end
 end)
 
--- Keyboard shortcuts: [K] = Toggle ON/OFF | [N] = Save current position as Niko's
-_G.NikoFarmInputConn = UserInputService.InputBegan:Connect(function(input)
+-- Teclado: [K] = ON/OFF | [N] = Calibrar posición de Niko si estás parado junto a él
+_G.NikoDeliveryConn = UserInputService.InputBegan:Connect(function(input)
     if not input or not input.KeyCode then return end
     if input.KeyCode == Enum.KeyCode.K or input.KeyCode == 107 then
         toggleFarm()
@@ -145,47 +138,49 @@ _G.NikoFarmInputConn = UserInputService.InputBegan:Connect(function(input)
         local char = lp.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if hrp then
-            QuestRegistry["NikoDelivery"].NpcPos = hrp.Position
-            print(string.format("[NikoAutoFarm] Niko's position updated to: Vector3.new(%.1f, %.1f, %.1f)", 
+            Config.NikoPos = hrp.Position
+            print(string.format("[NikoDelivery] Posición de Niko guardada en: Vector3.new(%.1f, %.1f, %.1f)", 
                 hrp.Position.X, hrp.Position.Y, hrp.Position.Z))
         end
     end
 end)
 
 -- =========================================================================
--- 3. ENVIRONMENT & TELEPORT UTILITIES (CFRAME FIX)
+-- 3. TELETRANSPORTE (CORRECCIÓN CFRAME MATCHA)
 -- =========================================================================
-
-local function smartTeleportToEntity(npcName, npcPos)
+local function teleportTo(targetPos, npcName)
     local char = lp.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return end
 
-    local target = npcPos
+    local dest = targetPos
 
-    -- Search if the NPC Model is loaded within the Workspace
+    -- Si el modelo exacto del NPC ya está en Workspace, teletransportarse a él
     if npcName and npcName ~= "" then
         for _, m in ipairs(workspace:GetDescendants()) do
             if m.ClassName == "Model" and m.Name:lower():find(npcName:lower(), 1, true) then
-                local part = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart or m:FindFirstChild("Head")
-                if part then
-                    target = part.Position
+                local root = m:FindFirstChild("HumanoidRootPart") or m.PrimaryPart or m:FindFirstChild("Head")
+                if root then
+                    dest = root.Position
                     break
                 end
             end
         end
     end
 
-    if target then
+    if dest then
         pcall(function()
             hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-            -- CFrame.new receives the 3 discrete coordinates (X, Y, Z)
-            hrp.CFrame = CFrame.new(target.X, target.Y + 2.5, target.Z)
+            -- Corrección: 3 números individuales para evitar el error de CFrame.new
+            hrp.CFrame = CFrame.new(dest.X, dest.Y + 2.5, dest.Z)
         end)
     end
-    task.wait(0.2)
+    task.wait(0.25)
 end
 
+-- =========================================================================
+-- 4. INTERACCIÓN Y DIÁLOGOS
+-- =========================================================================
 local function uiClick(btn)
     if not btn then return end
     if firesignal then
@@ -235,71 +230,29 @@ local function clickNearbyPrompt()
     end
 end
 
--- =========================================================================
--- 4. QUEST LOGIC & DIALOGUE HANDLING
--- =========================================================================
-
--- 1. Read the player's active quest data from ReplicatedStorage
-local function getActiveQuest()
-    local pData = ReplicatedStorage:FindFirstChild("Player_Service")
-        and ReplicatedStorage.Player_Service:FindFirstChild("Data")
-        and ReplicatedStorage.Player_Service.Data:FindFirstChild(lp.Name)
-    local holder = pData and pData:FindFirstChild("slots")
-        and pData.slots:FindFirstChild("Slot1")
-        and pData.slots.Slot1:FindFirstChild("Quests")
-        and pData.slots.Slot1.Quests:FindFirstChild("Holder")
-    if not holder then return nil end
-    local first = nil
-    for _, q in ipairs(holder:GetChildren()) do
-        local tasksFolder = q:FindFirstChild("Tasks")
-        if tasksFolder then
-            local tasks = {}
-            local isAllComplete = true
-            for _, t in ipairs(tasksFolder:GetChildren()) do
-                local val = t:FindFirstChild("Value") and t.Value.Value or 0
-                local max = t:FindFirstChild("Max") and t.Max.Value or 1
-                table.insert(tasks, {
-                    Name = t.Name,
-                    Value = val,
-                    Max = max,
-                    Code = t:FindFirstChild("Code") and t.Code.Value or ""
-                })
-                if val < max then
-                    isAllComplete = false
-                end
-            end
-            local qStr = q:FindFirstChild("QuestString") and q.QuestString.Value or q.Name
-            local entry = {
-                Folder = q,
-                Name = qStr,
-                Id = q.Name,
-                Tasks = tasks,
-                Complete = isAllComplete
-            }
-            if not isAllComplete then
-                return entry
-            end
-            if not first then first = entry end
-        end
+local function pressT()
+    clickNearbyPrompt()
+    if keypress and keyrelease then
+        pcall(function()
+            keypress(84) -- ASCII 84 = 'T'
+            task.wait(0.18)
+            keyrelease(84)
+        end)
+    elseif VirtualInputManager then
+        pcall(function()
+            VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.T, false, game)
+            task.wait(0.18)
+            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.T, false, game)
+        end)
     end
-    return first
 end
 
--- 2. Dialogue UI retrieval
 local function getDialogueUI()
     local holder = lp.PlayerGui:FindFirstChild("ComponentsHolder")
     local frame = holder and holder:FindFirstChild("DialogueFrame")
     local actual = frame and frame:FindFirstChild("Actual")
-    if not actual then return nil end
-    local bh = actual:FindFirstChild("ButtonHolder")
-    if bh then
-        for _, f in ipairs(bh:GetChildren()) do
-            if f.ClassName == "Frame" and f:FindFirstChild("TextButton") then
-                return actual
-            end
-        end
-    end
-    return nil
+    if not actual or not actual.Visible then return nil end
+    return actual
 end
 
 local function collectChoices(actual)
@@ -317,29 +270,45 @@ local function collectChoices(actual)
     return choices
 end
 
--- Simulate button clicks on NPC dialogues (avoids 'Close' accidentally)
-local function handleQuestDialogue(pickBoss)
-    for _ = 1, 45 do
+-- Avanza el diálogo seleccionando la opción deseada y evitando 'Close'
+local function handleDialogue(preferredText)
+    for _ = 1, 35 do
         local actual = getDialogueUI()
         if not actual then return true end
+
         local choices = collectChoices(actual)
         if #choices > 0 then
             local match = nil
-            -- Prioritize valid choices over 'Close'
-            for _, c in ipairs(choices) do
-                local t = c.Text and c.Text:lower() or ""
-                if not t:find("close") then
-                    match = c
-                    break
+
+            -- 1. Buscar si coincide con el texto esperado
+            if preferredText then
+                for _, c in ipairs(choices) do
+                    if c.Text and c.Text:lower():find(preferredText:lower(), 1, true) then
+                        match = c
+                        break
+                    end
                 end
             end
+
+            -- 2. Si no coincide, evitar cerrar la conversación por error
+            if not match then
+                for _, c in ipairs(choices) do
+                    local t = c.Text and c.Text:lower() or ""
+                    if not t:find("close") then
+                        match = c
+                        break
+                    end
+                end
+            end
+
             if not match then match = choices[1] end
-            
+
             if match then
                 uiClick(match.Button)
             end
             task.wait(0.45)
         else
+            -- Si es texto continuo de charla, hacer clic en ClickDetector para avanzar
             local cd = actual:FindFirstChild("ClickDetector")
             if cd then uiClick(cd) end
             task.wait(0.45)
@@ -348,105 +317,146 @@ local function handleQuestDialogue(pickBoss)
     return false
 end
 
--- 3. Teleport to NPC and press interaction key (T) to accept quest
-local function autoAcceptQuest(npcName, npcPos)
-    for round = 1, 3 do
-        smartTeleportToEntity(npcName, npcPos)
-        task.wait(0.9)
-        clickNearbyPrompt()
-        pcall(function() keypress(84); task.wait(0.35); keyrelease(84) end) -- Press 'T'
-        task.wait(0.8)
-        if getDialogueUI() then
-            if handleQuestDialogue(false) then
-                task.wait(1.0)
-                if getActiveQuest() then return true end
-            end
-        end
-        task.wait(0.6)
+-- =========================================================================
+-- 5. LECTURA EXACTA DEL ESTADO DEL PAQUETE Y LA MISIÓN
+-- =========================================================================
+
+-- Comprueba si el jugador tiene el Supply Box físico en su inventario
+local function hasSupplyBox()
+    local pData = ReplicatedStorage:FindFirstChild("Player_Service")
+        and ReplicatedStorage.Player_Service:FindFirstChild("Data")
+        and ReplicatedStorage.Player_Service.Data:FindFirstChild(lp.Name)
+    local inv = pData and pData:FindFirstChild("slots")
+        and pData.slots:FindFirstChild("Slot1")
+        and pData.slots.Slot1:FindFirstChild("Inventory")
+        and pData.slots.Slot1.Inventory:FindFirstChild("Inventory")
+    if inv and inv:FindFirstChild("Supply Box") then
+        return true
     end
     return false
 end
 
--- 4. Main State Machine step (Accept -> Deliver -> Claim -> Repeat)
-local function fafStep()
-    if not State.FullAutoFarm then return end
+-- Obtiene la misión de entrega activa
+local function getNikoQuest()
+    local pData = ReplicatedStorage:FindFirstChild("Player_Service")
+        and ReplicatedStorage.Player_Service:FindFirstChild("Data")
+        and ReplicatedStorage.Player_Service.Data:FindFirstChild(lp.Name)
+    local holder = pData and pData:FindFirstChild("slots")
+        and pData.slots:FindFirstChild("Slot1")
+        and pData.slots.Slot1:FindFirstChild("Quests")
+        and pData.slots.Slot1.Quests:FindFirstChild("Holder")
+    if not holder then return nil end
 
-    local activeQ = getActiveQuest()
-    local data = QuestRegistry[State.SelectedQuest]
-    if not data then return end
+    for _, q in ipairs(holder:GetChildren()) do
+        if q.Name:find("Deliver Niko") or q.Name:find("Supply Box") or q.Name:find("Niko") then
+            local tasksFolder = q:FindFirstChild("Tasks")
+            local tShiori = tasksFolder and tasksFolder:FindFirstChild("Deliver to Shiori")
+            local tReport = tasksFolder and tasksFolder:FindFirstChild("Report back to Niko")
 
-    if activeQ then
-        -- Check if package has already been delivered to Shiori
-        local isDelivered = false
-        if activeQ.Tasks then
-            for _, t in ipairs(activeQ.Tasks) do
-                if t.Name:find("Deliver to Shiori") and t.Value >= t.Max then
-                    isDelivered = true
-                    break
-                end
-            end
+            local deliverDone = tShiori and (tShiori.Value.Value >= tShiori.Max.Value) or false
+            local reportDone = tReport and (tReport.Value.Value >= tReport.Max.Value) or false
+
+            return {
+                Folder = q,
+                Name = q.Name,
+                DeliverDone = deliverDone,
+                ReportDone = reportDone
+            }
         end
-
-        if not isDelivered and not activeQ.Complete then
-            -- Case A: Active quest -> Teleport to Shiori at Butterfly Estate to deliver
-            State.AutoQuestTasks = true
-            print("[NikoAutoFarm] Delivering supply box to Shiori at Butterfly Estate...")
-            smartTeleportToEntity(data.TargetNpcName, data.TargetNpcPos)
-            task.wait(0.9)
-            clickNearbyPrompt()
-            pcall(function() keypress(84); task.wait(0.35); keyrelease(84) end)
-            task.wait(0.8)
-            if getDialogueUI() then
-                handleQuestDialogue(nil)
-            end
-            task.wait(0.5)
-
-        else
-            -- Case B: Package delivered or quest ready -> Return to Niko to report and claim rewards
-            State.AutoQuestTasks = false
-            print("[NikoAutoFarm] Claiming reward from Estate Worker Niko...")
-            smartTeleportToEntity(data.NpcName, data.NpcPos)
-            task.wait(0.9)
-            clickNearbyPrompt()
-            pcall(function() keypress(84); task.wait(0.35); keyrelease(84) end)
-            task.wait(0.8)
-            if getDialogueUI() then
-                handleQuestDialogue(nil)
-            end
-            task.wait(1.0)
-
-            -- Check if quest completed and claim registered
-            local checkQ = getActiveQuest()
-            if not checkQ or checkQ.Id ~= activeQ.Id then
-                Stats.Completed = Stats.Completed + 1
-                Stats.ExpEarned = Stats.Completed * 1000
-                Stats.MoneyEarned = Stats.Completed * 400
-                updateUI()
-                print(string.format("[NikoAutoFarm] Quest #%d claimed! (+1,000 EXP, +400 Money) | Total EXP: +%d", 
-                    Stats.Completed, Stats.ExpEarned))
-            end
-            task.wait(0.5)
-        end
-    else
-        -- Case C: No active quest -> Teleport to Niko and accept the quest
-        State.AutoQuestTasks = false
-        print("[NikoAutoFarm] Accepting quest from Estate Worker Niko...")
-        autoAcceptQuest(data.NpcName, data.NpcPos)
-        task.wait(0.8)
     end
+    return nil
 end
 
 -- =========================================================================
--- 5. RUN MAIN LOOP
+-- 6. BUCLE PRINCIPAL (EL CICLO INFINITO DE 3 PASOS)
 -- =========================================================================
-task.spawn(function()
-    print("[NikoAutoFarm] System running.")
-    print("[NikoAutoFarm] Controls: Click the on-screen button or press [K] to toggle | Press [N] to save Niko's position.")
-    
-    while _G.NikoFarmActive do
-        if State.FullAutoFarm then
-            fafStep()
+local function deliveryStep()
+    if not Config.Enabled then return end
+
+    local q = getNikoQuest()
+    local carryingBox = hasSupplyBox()
+
+    if not q then
+        -- =================================================================
+        -- PASO 1: No tienes la misión -> Ir con Niko a pedir el paquete
+        -- =================================================================
+        Stats.Phase = "Paso 1: Aceptando misión con Niko..."
+        updateUI()
+        print("[NikoDelivery]", Stats.Phase)
+
+        teleportTo(Config.NikoPos, "Niko")
+        task.wait(Config.InteractDelay)
+        pressT()
+        task.wait(0.8)
+
+        if getDialogueUI() then
+            -- Opción decompilada para aceptar: "Ill deliver the supply box(Lv 70)"
+            handleDialogue("deliver the supply box")
+        end
+        task.wait(0.8)
+
+    elseif q and (carryingBox or not q.DeliverDone) then
+        -- =================================================================
+        -- PASO 2: Tienes el paquete -> Llevarlo a Shiori en Butterfly Estate
+        -- =================================================================
+        Stats.Phase = "Paso 2: Entregando paquete a Shiori..."
+        updateUI()
+        print("[NikoDelivery]", Stats.Phase)
+
+        teleportTo(Config.ShioriPos, "Shiori")
+        task.wait(Config.InteractDelay)
+        pressT()
+        task.wait(0.8)
+
+        if getDialogueUI() then
+            -- Opción decompilada para entregar: "Niko sent it up"
+            handleDialogue("Niko sent it up")
+        end
+        task.wait(0.8)
+
+    elseif q and q.DeliverDone then
+        -- =================================================================
+        -- PASO 3: Paquete entregado -> Regresar con Niko a cobrar recompensa
+        -- =================================================================
+        Stats.Phase = "Paso 3: Cobrando recompensa con Niko..."
+        updateUI()
+        print("[NikoDelivery]", Stats.Phase)
+
+        teleportTo(Config.NikoPos, "Niko")
+        task.wait(Config.InteractDelay)
+        pressT()
+        task.wait(0.8)
+
+        if getDialogueUI() then
+            -- Opción decompilada para cobrar: "Shiori says thank you"
+            handleDialogue("thank you")
+        end
+        task.wait(1.0)
+
+        -- Verificar si la misión finalizó para actualizar contadores
+        local afterQ = getNikoQuest()
+        if not afterQ then
+            Stats.Completed = Stats.Completed + 1
+            Stats.ExpEarned = Stats.Completed * 1000
+            Stats.MoneyEarned = Stats.Completed * 400
+            Stats.Phase = string.format("¡Misión #%d cobrada! (+1k EXP)", Stats.Completed)
+            updateUI()
+            print(string.format("[NikoDelivery] ¡Ciclo #%d completado! (+1,000 EXP, +400 Dinero) | Total EXP: %d | Total Dinero: %d", 
+                Stats.Completed, Stats.ExpEarned, Stats.MoneyEarned))
         end
         task.wait(0.5)
+    end
+end
+
+-- Lanzar bucle
+task.spawn(function()
+    print("[NikoDelivery] Script en marcha.")
+    print("[NikoDelivery] Haz clic al botón o presiona [K] para Pausar/Activar | Presiona [N] al lado de Niko para calibrar su posición.")
+
+    while _G.NikoDeliveryActive do
+        if Config.Enabled then
+            deliveryStep()
+        end
+        task.wait(0.4)
     end
 end)
