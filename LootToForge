@@ -1,7 +1,3 @@
---[[
-    RealOrCake +1 loot to forge - Matcha Hub (NonUI)
---]]
-
 if _G.MatchaLootForgeHubCleanup then
     pcall(_G.MatchaLootForgeHubCleanup)
 end
