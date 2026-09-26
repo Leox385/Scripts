@@ -256,7 +256,7 @@ local autoFarmToggle = FarmTab:Toggle({
 local RebirthTab = MainSection:Tab({ Title = "Rebirth", Icon = "refreshcw" })
 
 local autoRebirthToggle = RebirthTab:Toggle({
-    Title = "Auto-Rebirth + Auto-Train",
+    Title = "Auto-Rebirth + Auto-Train (ONLY PRO)",
     Desc = "Detects rebirths, teleports to optimal machine, trains and rebirths in loop",
     Default = false,
     Callback = function(on)
@@ -266,7 +266,7 @@ local autoRebirthToggle = RebirthTab:Toggle({
 })
 
 RebirthTab:Button({
-    Title = "Redeem Codes",
+    Title = "Redeem Codes and Rewards (ONLY PRO)",
     Desc = "Claims all active promo codes",
     Icon = "star",
     Callback = function()
