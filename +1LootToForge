@@ -1,0 +1,501 @@
+--[[
+    RealOrCake +1 loot to forge - Matcha Hub (NonUI)
+--]]
+
+if _G.MatchaLootForgeHubCleanup then
+    pcall(_G.MatchaLootForgeHubCleanup)
+end
+
+local Non = loadstring(game:HttpGet("https://raw.githubusercontent.com/neaxusxgod-png/NonUI/main/NonUI.lua"))() or NonUI
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+
+local lp = Players.LocalPlayer
+local remotes = ReplicatedStorage:FindFirstChild("Remote")
+
+local STATE = {
+    Running = true,
+    AutoFarm = false,
+    GodMode = false,
+    BypassBarriers = false,
+    AutoRebirth = false,
+    SelectedStage = 1,
+    LastRebirthTick = 0
+}
+
+local PROMO_CODES = {
+    "RELEASE", "WELCOME", "FORGE", "UPDATE",
+    "100LIKES", "500LIKES", "1000LIKES", "2000LIKES",
+    "3000LIKES", "5000LIKES", "10KLIKES",
+    "DUNGEON", "LOOT", "SWORD", "LUCK", "FREE", "DISCORD", "RACES", "50000CCU", "30000CCU", "20000CCU"
+}
+
+local STAGE_COORDS = {
+    [1]  = Vector3.new(-12, 6, -142.03),
+    [2]  = Vector3.new(-12, 6, -249.03),
+    [3]  = Vector3.new(13, 6, -356.03),
+    [4]  = Vector3.new(1, 6, -460.03),
+    [5]  = Vector3.new(1, 6, -579.03),
+    [6]  = Vector3.new(1, 6, -682.03),
+    [7]  = Vector3.new(1, 6, -798.84),
+    [8]  = Vector3.new(1, 6, -891.03),
+    [9]  = Vector3.new(1, 6, -986.03),
+    [10] = Vector3.new(1, 6, -1113.03),
+    [11] = Vector3.new(-12, 6, -1226.03),
+    [12] = Vector3.new(-8, 6, -1323.03),
+    [13] = Vector3.new(1, 6, -1453.03),
+    [14] = Vector3.new(10, 6, -1545.03),
+    [15] = Vector3.new(-12, 6, -1664.03),
+    [16] = Vector3.new(1, 6, -1780.03),
+    [17] = Vector3.new(1, 6, -1886.03),
+    [18] = Vector3.new(-12, 6, -1987.59),
+    [19] = Vector3.new(1, 6, -2102.36),
+    [20] = Vector3.new(-8, 6, -2192.46),
+    [21] = Vector3.new(10, 6, -2301.20),
+    [22] = Vector3.new(-12, 6, -2421.92),
+    [23] = Vector3.new(1, 6, -2536.22),
+    [24] = Vector3.new(1, 6, -2643.99),
+    [25] = Vector3.new(-8, 6, -2734.09),
+    [26] = Vector3.new(-8, 6, -2842.83),
+    [27] = Vector3.new(1, 6, -2970.55),
+}
+
+local AUTO_TRAIN_AREAS = {
+    { id = 11, needRebirth = 30, pos = Vector3.new(-78.89, 11.75, -41.02), name = "Area 11 (30+ Rebirths)" },
+    { id = 10, needRebirth = 25, pos = Vector3.new(-79.06, 11.75, 42.68),  name = "Area 10 (25+ Rebirths)" },
+    { id = 8,  needRebirth = 21, pos = Vector3.new(-105.94, 11.53, -30.69), name = "Area 8 (21+ Rebirths, x25)" },
+    { id = 7,  needRebirth = 18, pos = Vector3.new(-106.92, 11.55, 31.77),  name = "Area 7 (18+ Rebirths, x15)" },
+    { id = 6,  needRebirth = 15, pos = Vector3.new(-79.64, 10.14, -20.78),  name = "Area 6 (15+ Rebirths, x10)" },
+    { id = 5,  needRebirth = 12, pos = Vector3.new(-79.64, 10.14, 21.07),   name = "Area 5 (12+ Rebirths, x8)" },
+    { id = 4,  needRebirth = 9,  pos = Vector3.new(-52.96, 7.25, 42.82),    name = "Area 4 (9+ Rebirths, x6)" },
+    { id = 3,  needRebirth = 5,  pos = Vector3.new(-52.96, 7.25, 21.21),    name = "Area 3 (5+ Rebirths, x4)" },
+    { id = 2,  needRebirth = 2,  pos = Vector3.new(-52.96, 7.25, -20.84),   name = "Area 2 (2+ Rebirths, x2)" },
+    { id = 1,  needRebirth = 0,  pos = Vector3.new(-52.96, 7.25, -40.66),   name = "Area 1 (0 Rebirths, x1.5)" },
+}
+
+local function say(title, body, icon)
+    if Non and Non.Notify then
+        pcall(function()
+            Non:Notify({
+                Title = title,
+                Content = body,
+                Icon = icon or "circlecheck",
+                Duration = 3
+            })
+        end)
+    end
+end
+
+local function getHRP()
+    local char = lp.Character
+    return char and (char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso"))
+end
+
+local function teleportTo(pos)
+    if not pos then return false end
+    local hrp = getHRP()
+    if not hrp then return false end
+    local x, y, z = pos.X, pos.Y + 3.5, pos.Z
+    pcall(function() hrp.CFrame = CFrame.new(x, y, z) end)
+    pcall(function() hrp.Position = Vector3.new(x, y, z) end)
+    return true
+end
+
+local function getStagePosition(stageNum)
+    local targetPos = nil
+    pcall(function()
+        local sm = Workspace:FindFirstChild("WorldModel") and Workspace.WorldModel:FindFirstChild("StageMap")
+        local ep = sm and sm:FindFirstChild("EnemyPoint")
+        local stageModel = ep and ep:FindFirstChild("Stage_" .. stageNum)
+        if stageModel then
+            for _, child in ipairs(stageModel:GetChildren()) do
+                if child.ClassName == "Part" or child:IsA("BasePart") then
+                    targetPos = child.Position
+                    break
+                end
+            end
+        end
+    end)
+    if not targetPos then
+        targetPos = STAGE_COORDS[stageNum]
+    end
+    return targetPos
+end
+
+local function teleportToStage(stageNum)
+    local pos = getStagePosition(stageNum)
+    if pos and teleportTo(pos) then
+        say("Teleport", "Teleported to Zone " .. stageNum, "circlecheck")
+    else
+        say("Teleport", "Failed to teleport to Zone " .. stageNum, "circlex")
+    end
+end
+
+local function getBestTrainArea()
+    local rebirths = 0
+    pcall(function()
+        local eco = lp:FindFirstChild("Eco")
+        if eco and eco:FindFirstChild("rebirth") then
+            rebirths = tonumber(eco.rebirth.Value) or 0
+        end
+    end)
+
+    local helper = nil
+    pcall(function()
+        helper = require(ReplicatedStorage.Config.TrainArea.Helper)
+    end)
+
+    for _, area in ipairs(AUTO_TRAIN_AREAS) do
+        local need = area.needRebirth
+        if helper and helper.GetNeedRebirth then
+            pcall(function()
+                need = helper.GetNeedRebirth(area.id) or need
+            end)
+        end
+        if rebirths >= need then
+            local livePos = area.pos
+            pcall(function()
+                local touched = Workspace:FindFirstChild("TOUCHED")
+                local trainAreaFolder = touched and touched:FindFirstChild("AutoTrainArea")
+                local part = trainAreaFolder and trainAreaFolder:FindFirstChild(tostring(area.id))
+                if part and (part.ClassName == "Part" or part:IsA("BasePart")) then
+                    livePos = part.Position
+                end
+            end)
+            return area, livePos, rebirths
+        end
+    end
+
+    local fallback = AUTO_TRAIN_AREAS[#AUTO_TRAIN_AREAS]
+    return fallback, fallback.pos, rebirths
+end
+
+local function applyGodMode()
+    if not STATE.GodMode then return end
+    local hpVal = lp:FindFirstChild("HPValue")
+    if hpVal then
+        if hpVal.Value < 900000000 then hpVal.Value = 999999999 end
+        local maxHp = hpVal:GetAttribute("MaxHP")
+        if not maxHp or maxHp < 900000000 then hpVal:SetAttribute("MaxHP", 999999999) end
+    end
+end
+
+local function applyBarrierBypass()
+    local wm = Workspace:FindFirstChild("WorldModel")
+    local sm = wm and wm:FindFirstChild("StageMap")
+    local boards = sm and sm:FindFirstChild("Boards")
+    if boards then
+        for _, b in ipairs(boards:GetChildren()) do
+            if b.ClassName == "Part" or b:IsA("BasePart") then
+                b.CanCollide = not STATE.BypassBarriers
+            end
+        end
+    end
+end
+
+local function killStageEnemies()
+    local enemyFolder = Workspace:FindFirstChild("EnemyFolder")
+    if not enemyFolder then return 0 end
+    local count = 0
+    for _, enemy in ipairs(enemyFolder:GetChildren()) do
+        local hp = enemy:FindFirstChild("HPValue")
+        if hp and hp.Value > 0 then
+            hp.Value = 0
+            count = count + 1
+        end
+    end
+    return count
+end
+
+local function redeemAllRewards()
+    task.spawn(function()
+        if remotes and remotes:FindFirstChild("Code") and remotes.Code:FindFirstChild("TryUseCodeRF") then
+            local codeRF = remotes.Code.TryUseCodeRF
+            for _, code in ipairs(PROMO_CODES) do
+                pcall(function() codeRF:InvokeServer(code) end)
+                task.wait(0.08)
+            end
+        end
+        pcall(function()
+            if remotes.Dungeon then remotes.Dungeon.TryClaimDailyDunTicRE:FireServer() end
+            if remotes.Offline then remotes.Offline.TryClaimOfflineRewardRE:FireServer() end
+            if remotes.UpdateLog then remotes.UpdateLog.TryClaimUPDRewardRE:FireServer() end
+            if remotes.Online then
+                for i = 1, 12 do remotes.Online.TryClaimRE:FireServer(i) end
+            end
+        end)
+    end)
+end
+
+local Window = Non:CreateWindow({
+    Title = "RealOrCake +1 loot to forge",
+    Folder = "RealOrCakeHub",
+    Theme = "Emerald",
+    Size = { 630, 480 },
+    OpenButton = { Title = "Open", Draggable = true }
+})
+
+Window:SetToggleKey("h")
+
+local MainSection = Window:Section({ Title = "Features" })
+
+local FarmTab = MainSection:Tab({ Title = "Farm", Icon = "crosshair" })
+
+local autoFarmToggle = FarmTab:Toggle({
+    Title = "Insta-kill",
+    Default = false,
+    Callback = function(on)
+        STATE.AutoFarm = on
+        say("Auto-Farm", on and "Enabled" or "Disabled", on and "circlecheck" or "circlex")
+    end
+})
+
+local RebirthTab = MainSection:Tab({ Title = "Rebirth", Icon = "refreshcw" })
+
+local autoRebirthToggle = RebirthTab:Toggle({
+    Title = "Auto-Rebirth + Auto-Train",
+    Desc = "Detects rebirths, teleports to optimal machine, trains and rebirths in loop",
+    Default = false,
+    Callback = function(on)
+        STATE.AutoRebirth = on
+        say("Auto-Rebirth", on and "Started" or "Stopped", on and "zap" or "circlex")
+    end
+})
+
+RebirthTab:Button({
+    Title = "Redeem Codes",
+    Desc = "Claims all active promo codes",
+    Icon = "star",
+    Callback = function()
+        redeemAllRewards()
+        say("Rewards", "Redeeming codes and gifts...", "star")
+    end
+})
+
+local ZonesTab = MainSection:Tab({ Title = "Zones", Icon = "grid2x2" })
+
+local stageOptions = {}
+for i = 1, 27 do
+    table.insert(stageOptions, "Zone " .. i)
+end
+
+ZonesTab:Dropdown({
+    Title = "Zone Selector",
+    Desc = "Choose a zone and click teleport below",
+    Values = stageOptions,
+    Default = "Zone 1",
+    SearchBarEnabled = true,
+    Callback = function(chosen)
+        local num = tonumber(string.match(chosen, "%d+"))
+        if num then
+            STATE.SelectedStage = num
+        end
+    end
+})
+
+ZonesTab:Button({
+    Title = "Teleport to Selected Zone",
+    Desc = "Teleports character to selected zone",
+    Icon = "play",
+    Callback = function()
+        teleportToStage(STATE.SelectedStage or 1)
+    end
+})
+
+ZonesTab:Divider()
+
+local allZonesGroup = ZonesTab:Group({
+    Title = "All Zones (1-27)",
+    Closed = false
+})
+
+for i = 1, 27 do
+    allZonesGroup:Button({
+        Title = "Zone " .. i,
+        Desc = "Teleport to Zone " .. i,
+        Size = "Small",
+        Icon = "map",
+        Callback = function()
+            teleportToStage(i)
+        end
+    })
+end
+
+local PlayerTab = MainSection:Tab({ Title = "Player", Icon = "shield" })
+
+local godModeToggle = PlayerTab:Toggle({
+    Title = "God Mode",
+    Desc = "Locks health to 999,999,999",
+    Default = false,
+    Callback = function(on)
+        STATE.GodMode = on
+        if on then applyGodMode() end
+        say("God Mode", on and "Enabled" or "Disabled", on and "shield" or "eyeoff")
+    end
+})
+
+local barrierToggle = PlayerTab:Toggle({
+    Title = "Bypass Barriers",
+    Desc = "Disables collision on stage barriers",
+    Default = false,
+    Callback = function(on)
+        STATE.BypassBarriers = on
+        applyBarrierBypass()
+        say("Barriers", on and "Bypassed" or "Normal Collision", "slidershorizontal")
+    end
+})
+
+local SettingsSection = Window:Section({ Title = "Settings" })
+local SettingsTab = SettingsSection:Tab({ Title = "Settings", Icon = "palette" })
+
+SettingsTab:Dropdown({
+    Title = "Theme",
+    Values = Non:GetThemes(),
+    Default = "Emerald",
+    Callback = function(name)
+        Non:SetTheme(name)
+    end
+})
+
+SettingsTab:Slider({
+    Title = "Transparency",
+    Min = 0,
+    Max = 60,
+    Default = 0,
+    Suffix = "%",
+    Callback = function(v)
+        Non:SetTransparency(v / 100)
+    end
+})
+
+SettingsTab:Slider({
+    Title = "UI Scale",
+    Min = 70,
+    Max = 130,
+    Default = 100,
+    Suffix = "%",
+    Callback = function(v)
+        Window:SetUIScale(v / 100)
+    end
+})
+
+SettingsTab:Keybind({
+    Title = "Toggle Key",
+    Default = "h",
+    Callback = function(key)
+        Window:SetToggleKey(key)
+    end
+})
+
+SettingsTab:Button({
+    Title = "Unload Script",
+    Desc = "Stops all loops and removes UI",
+    Icon = "trash2",
+    Callback = function()
+        if _G.MatchaLootForgeHubCleanup then
+            _G.MatchaLootForgeHubCleanup()
+        end
+    end
+})
+
+FarmTab:Select()
+
+local inputConn = UserInputService.InputBegan:Connect(function(input)
+    if not input or not input.KeyCode then return end
+    local code = input.KeyCode
+
+    if code == Enum.KeyCode.H.Value or code == Enum.KeyCode.H then
+        if Window then Window:Toggle() end
+    end
+end)
+
+task.spawn(function()
+    local lastMachineId = nil
+
+    while STATE.Running do
+        task.wait(0.35)
+        if STATE.AutoRebirth then
+            pcall(function()
+                local bestArea, areaPos, currentRebirths = getBestTrainArea()
+                local trainFolder = remotes and remotes:FindFirstChild("Train")
+                local rebirthFolder = remotes and remotes:FindFirstChild("Rebirth")
+
+                local intoRE = trainFolder and trainFolder:FindFirstChild("IntoAutoTrainRE")
+                local trainRE = trainFolder and trainFolder:FindFirstChild("TrainOnceRE")
+                local rebirthRE = rebirthFolder and rebirthFolder:FindFirstChild("TryRebirthRE")
+
+                if bestArea and bestArea.id ~= lastMachineId then
+                    lastMachineId = bestArea.id
+                    teleportTo(areaPos)
+                    task.wait(0.2)
+                    if intoRE then
+                        intoRE:FireServer(bestArea.id)
+                    end
+                    lp:SetAttribute("AutoTrainAreaID", bestArea.id)
+                    say("Auto-Train", "Training at: " .. bestArea.name, "zap")
+                end
+
+                if trainRE then
+                    trainRE:FireServer()
+                end
+
+                if tick() - STATE.LastRebirthTick > 2.0 then
+                    STATE.LastRebirthTick = tick()
+                    if rebirthRE then
+                        rebirthRE:FireServer()
+                    end
+                end
+            end)
+        else
+            if lastMachineId ~= nil then
+                lastMachineId = nil
+                pcall(function()
+                    local trainFolder = remotes and remotes:FindFirstChild("Train")
+                    local exitRE = trainFolder and trainFolder:FindFirstChild("ExitAutoTrainRE")
+                    if exitRE then
+                        exitRE:FireServer()
+                    end
+                    lp:SetAttribute("AutoTrainAreaID", nil)
+                end)
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    applyBarrierBypass()
+
+    while STATE.Running do
+        if STATE.GodMode then
+            applyGodMode()
+        end
+        applyBarrierBypass()
+
+        if STATE.AutoFarm then
+            killStageEnemies()
+        end
+
+        task.wait(0.2)
+    end
+end)
+
+_G.MatchaLootForgeHubCleanup = function()
+    STATE.Running = false
+    pcall(function()
+        local trainFolder = remotes and remotes:FindFirstChild("Train")
+        local exitRE = trainFolder and trainFolder:FindFirstChild("ExitAutoTrainRE")
+        if exitRE then exitRE:FireServer() end
+        lp:SetAttribute("AutoTrainAreaID", nil)
+    end)
+    if inputConn then pcall(function() inputConn:Disconnect() end) end
+    if Non and Non.Unload then
+        pcall(function() Non:Unload() end)
+    elseif Window and Window.Destroy then
+        pcall(function() Window:Destroy() end)
+    end
+end
+
+say("RealOrCake", "Loaded successfully", "circlecheck")
