@@ -24,30 +24,53 @@ end
 assert(Non, "Failed to load NonUI library.")
 
 local selectedTreeType = "All (Nearest)"
-local bringFilterMode = "My Logs & Unowned"
+local bringFilterMode = "My Logs Only"
 local autoMagnetActive = false
+local customWalkSpeed = 16
 local selectedWaypoint = "Wood R Us (Shop)"
 local isManualChopping = false
 
+local itemFilterMode = "All Loose Items"
+local itemOwnershipMode = "My Items & Unowned"
+local autoItemMagnetActive = false
+local selectedPlankType = "All"
+local plankOwnershipMode = "My Planks & Unowned"
+local autoPlankMagnetActive = false
+
 local axeStats = {
-    BasicHatchet    = {damage = 0.20, cooldown = 0.65},
-    Axe1            = {damage = 0.55, cooldown = 0.80},
-    Axe2            = {damage = 0.93, cooldown = 0.85},
-    Axe3            = {damage = 1.45, cooldown = 0.85},
-    SilverAxe       = {damage = 1.60, cooldown = 0.85},
-    Rukiryaxe       = {damage = 1.68, cooldown = 0.85},
-    RefinedAxe      = {damage = 2.10, cooldown = 0.75},
-    ManyAxe         = {damage = 10.2, cooldown = 0.75},
-    EndTimesAxe     = {damage = 1.58, cooldown = 0.85},
-    FireAxe         = {damage = 0.60, cooldown = 0.75},
-    IceAxe          = {damage = 1.50, cooldown = 0.85},
-    CaveAxe         = {damage = 0.40, cooldown = 0.80},
-    CandyCaneAxe    = {damage = 1.40, cooldown = 0.85},
-    Beesaxe         = {damage = 1.40, cooldown = 0.85},
-    AxeAmber        = {damage = 3.39, cooldown = 0.75},
-    AxeChicken      = {damage = 0.90, cooldown = 0.85},
-    AxeBetaTesters  = {damage = 1.45, cooldown = 0.85},
-    AxeAlphaTesters = {damage = 1.50, cooldown = 0.85},
+    BasicHatchet    = {damage = 0.20, cooldown = 0.65, range = 10},
+    Axe1            = {damage = 0.55, cooldown = 0.73, range = 10},
+    Axe2            = {damage = 0.93, cooldown = 0.70, range = 10},
+    Axe3            = {damage = 1.45, cooldown = 0.65, range = 10},
+    SilverAxe       = {damage = 1.60, cooldown = 0.48, range = 10},
+    Rukiryaxe       = {damage = 1.68, cooldown = 0.40, range = 9},
+    RefinedAxe      = {damage = 0.00, cooldown = 0.60, range = 13, onProcessed = 12},
+    ManyAxe         = {damage = 10.20, cooldown = 1.90, range = 16},
+    EndTimesAxe     = {damage = 1.58, cooldown = 0.40, range = 9},
+    FireAxe         = {damage = 0.60, cooldown = 0.55, range = 9, special = { Volcano = {damage = 6.35, cooldown = 0.35} }},
+    IceAxe          = {damage = 0.36, cooldown = 0.40, range = 9.2, special = { Frost = {damage = 6.00, cooldown = 0.31} }},
+    CaveAxe         = {damage = 0.40, cooldown = 0.40, range = 10, special = { CaveCrawler = {damage = 7.20, cooldown = 0.22} }},
+    CandyCaneAxe    = {damage = 0.00, cooldown = 0.70, range = 6},
+    Beesaxe         = {damage = 1.40, cooldown = 0.50, range = 13},
+    AxeAmber        = {damage = 3.39, cooldown = 1.00, range = 9},
+    AxeChicken      = {damage = 0.90, cooldown = 0.30, range = 10},
+    AxeBetaTesters  = {damage = 1.45, cooldown = 0.54, range = 10},
+    AxeAlphaTesters = {damage = 1.50, cooldown = 0.50, range = 10},
+    GlorbAxe        = {damage = 1.80, cooldown = 0.38, range = 10},
+    RustyAxe        = {damage = 0.55, cooldown = 0.40, range = 10},
+    SteelAxe        = {damage = 0.93, cooldown = 0.70, range = 10},
+    HardenedAxe     = {damage = 1.45, cooldown = 0.65, range = 10},
+    AxeSwamp        = {damage = 0.80, cooldown = 0.55, range = 9, special = { GoldSwampy = {damage = 5.35, cooldown = 0.35}, GreenSwampy = {damage = 7.00, cooldown = 0.46} }},
+    BirdAxe         = {damage = 1.65, cooldown = 0.40, range = 16},
+    AxeTwitter      = {damage = 1.65, cooldown = 0.40, range = 16},
+    SpookyAxe       = {damage = 1.68, cooldown = 0.40, range = 9},
+    CandyCornAxe    = {damage = 1.75, cooldown = 0.60, range = 16},
+    AxePie          = {damage = 0.95, cooldown = 0.30, range = 15.5, special = { Cherry = {damage = 1.90, cooldown = 0.25} }},
+    BluesteelAxe    = {damage = 2.80, cooldown = 0.80, range = 12},
+    MintAxe         = {damage = 0.80, cooldown = 5.00, range = 1},
+    AxePig          = {damage = 1.50, cooldown = 0.50, range = 10},
+    GingerbreadAxe  = {damage = 1.20, cooldown = 0.50, range = 32, special = { Koa = {damage = 11.00, cooldown = 0.40}, Walnut = {damage = 8.50, cooldown = 0.40} }},
+    InverseAxe      = {damage = -1.00, cooldown = 0.40, range = 12},
 }
 
 local function getChar()
@@ -90,11 +113,49 @@ local function getMyPlot()
     return nil
 end
 
+local function isRealBasePart(obj)
+    if not obj or typeof(obj) ~= "Instance" then return false end
+    local cn = obj.ClassName
+    return cn == "Part" or cn == "MeshPart" or cn == "UnionOperation" or cn == "WedgePart" or cn == "CornerWedgePart" or cn == "TrussPart"
+end
+
+local function getItemMainPart(item)
+    if not item or not item.Parent then return nil end
+    local main = item:FindFirstChild("Main")
+    if main and isRealBasePart(main) and typeof(main.Position) == "Vector3" then
+        return main
+    end
+    for _, ch in ipairs(item:GetChildren()) do
+        if isRealBasePart(ch) and typeof(ch.Position) == "Vector3" then
+            return ch
+        end
+    end
+    for _, ch in ipairs(item:GetDescendants()) do
+        if isRealBasePart(ch) and typeof(ch.Position) == "Vector3" then
+            return ch
+        end
+    end
+    return nil
+end
+
+local function isPlayerOwnedItem(item)
+    if not item then return false end
+    local o = item:FindFirstChild("Owner")
+    if not o or not o.Value then return false end
+    local str = tostring(o.Value)
+    if str:find("Unreadable") then return false end
+    if str:find(lp.Name) or (pcall(function() return o.Value.UserId == lp.UserId end) and o.Value.UserId == lp.UserId) then
+        return true
+    end
+    return false
+end
+
 local function teleportToMyPlot()
     local plot = getMyPlot()
     if not plot then return false end
     local origin = plot:FindFirstChild("OriginSquare")
-    local pos = origin and origin.Position or (plot:FindFirstChildWhichIsA("BasePart") and plot:FindFirstChildWhichIsA("BasePart").Position)
+    local mainPart = getItemMainPart(plot)
+    local pos = (origin and origin.Position) or (mainPart and mainPart.Position)
     if pos then
         return safeTeleport(pos + Vector3.new(0, 5, 0))
     end
@@ -112,8 +173,8 @@ local function isAxeTool(t)
     return false
 end
 
-local function getToolAxeInfo(axe)
-    if not axe then return "BasicHatchet", {damage = 0.20, cooldown = 0.65} end
+local function getToolAxeInfo(axe, treeClassName)
+    if not axe then return "BasicHatchet", {damage = 0.20, cooldown = 0.65, swingCooldown = 0.65, wireCooldown = 0.32, range = 10} end
     local tnObj = axe:FindFirstChild("ToolName")
     local tip = ""
     pcall(function() tip = axe.ToolTip end)
@@ -124,19 +185,46 @@ local function getToolAxeInfo(axe)
         (axe.Name ~= "Tool" and axe.Name ~= "") and axe.Name or nil
     }
     
+    local matchedKey = nil
+    local matchedData = nil
     for _, cand in ipairs(nameCandidates) do
         if cand then
             if axeStats[cand] then
-                return cand, axeStats[cand]
+                matchedKey = cand
+                matchedData = axeStats[cand]
+                break
             end
             for name, data in pairs(axeStats) do
                 if cand:lower():find(name:lower(), 1, true) or name:lower():find(cand:lower(), 1, true) then
-                    return name, data
+                    matchedKey = name
+                    matchedData = data
+                    break
                 end
             end
+            if matchedData then break end
         end
     end
-    return "BasicHatchet", {damage = 0.20, cooldown = 0.65}
+    
+    if not matchedData then
+        matchedKey = "BasicHatchet"
+        matchedData = {damage = 0.20, cooldown = 0.65, range = 10}
+    end
+    
+    local effectiveDmg = matchedData.damage
+    local effectiveCd = matchedData.cooldown
+    if treeClassName and matchedData.special and matchedData.special[treeClassName] then
+        effectiveDmg = matchedData.special[treeClassName].damage or effectiveDmg
+        effectiveCd = matchedData.special[treeClassName].cooldown or effectiveCd
+    end
+    
+    local wireCd = math.max(0.05, 0.65 * effectiveCd - 0.1)
+    return matchedKey, {
+        damage = effectiveDmg,
+        cooldown = effectiveCd,
+        swingCooldown = effectiveCd,
+        wireCooldown = wireCd,
+        range = matchedData.range or 10
+    }
 end
 
 local function ensureAxeEquipped()
@@ -154,7 +242,7 @@ local function ensureAxeEquipped()
         for _, t in ipairs(bp:GetChildren()) do
             if isAxeTool(t) then
                 t.Parent = char
-                task.wait(0.3)
+                task.wait(0.25)
                 return t
             end
         end
@@ -216,61 +304,123 @@ end
 
 local function isSpecialTree(p, r, g, b, val)
     if val ~= "" and val ~= "oak" and val ~= "generic" then return true end
-    if (p.Y > 300 and p.Z > 2500) or (r > 230 and g > 225 and b > 225) then return true end
-    if (p.Y > 300 and p.X < -1400) or (r > 180 and g < 60 and b < 50) then return true end
-    if (p.Y < -50) or (b > 80 and r < 30 and g < 40) then return true end
-    if (p.Z > 650 and p.Z < 1550 and p.X > 50 and p.X < 450 and r > 90 and g < 80) then return true end
-    if (p.X < -700 and p.X > -1500 and p.Z < -600 and p.Z > -1200) or (r > 220 and g > 160 and b < 80) then return true end
-    if (p.Y < 5 and (p.X > 1800 or p.Z < -1400)) then return true end
-    if (p.X > 4000 and p.Z > -1000) then return true end
-    if (p.Z > 1800 and p.Z < 2500 and p.X > 1000) then return true end
-    if (r > 240 and g > 240 and b < 215) then return true end
+    if (p.Y > 300 and p.Z > 2500) or (r > 210 and g > 210 and b > 210) then return true end -- Frost
+    if (p.Y >= -30 and p.Y <= 30 and p.X >= -1350 and p.X <= -950 and p.Z >= -1250 and p.Z <= -700) or (r > 210 and g > 150 and b < 100) then return true end -- SnowGlow
+    if (p.Y > 500 and p.X < -1300) or (r > 170 and g < 70 and b < 60) then return true end -- Volcano
+    if (p.Y < -40) or (b > 70 and r < 40 and g < 50) then return true end -- CaveCrawler
+    if (p.Z > 600 and p.Z < 1600 and p.X > 0 and p.X < 700 and r > 90 and r < 130 and g < 80) then return true end -- Cherry
+    if (p.Y >= 115 and p.Y <= 170 and p.X >= -1500 and p.X <= -750 and p.Z >= -1550 and p.Z <= -450) then return true end -- Swamp (Gold/Green)
+    if (p.Y < 25 and (p.X > 1700 or p.Z < -1300) and r > 185 and g > 175) then return true end -- Palm
+    if (p.X > 4200 and p.Z > -1000 and p.Z < 600 and r > 160 and r < 190) then return true end -- Koa
+    if (p.Z < -1000 and p.X > -600 and p.X < 900 and r > 140 and r < 180 and g > 80 and g < 115) then return true end -- Walnut
+    if (r > 240 and g > 240 and b > 180) then return true end -- Birch
     return false
 end
 
 local function matchesTreeClass(tree, targetType)
     if not tree or not tree.Parent then return false end
-    if targetType == "All (Nearest)" then return true end
+    if targetType == "All (Nearest)" or targetType == "All" then return true end
 
     local tc = tree:FindFirstChild("TreeClass")
     local val = (tc and tc.Value or ""):lower()
     local target = (targetType or ""):lower()
 
     if val ~= "" then
-        if target == "goldswampy" and (val:find("gold") or val:find("swamp")) then return true end
-        if target == "cavecrawler" and (val:find("cave") or val:find("crawler")) then return true end
-        if target == "snowglow" and (val:find("snow") or val:find("glow")) then return true end
-        if val == target or val:find(target, 1, true) then return true end
+        if target == "frost" then
+            return val:find("frost") ~= nil or val:find("ice") ~= nil
+        elseif target == "snowglow" then
+            return val:find("snowglow") ~= nil or (val:find("glow") ~= nil and not val:find("frost"))
+        elseif target == "volcano" then
+            return val:find("volcano") ~= nil or val:find("lava") ~= nil
+        elseif target == "goldswampy" then
+            return val:find("gold") ~= nil
+        elseif target == "greenswampy" then
+            return val:find("greenswamp") ~= nil or (val:find("swamp") ~= nil and not val:find("gold"))
+        elseif target == "cavecrawler" then
+            return val:find("cave") ~= nil or val:find("crawler") ~= nil
+        elseif target == "spooky" then
+            return val:find("spook") ~= nil
+        elseif target == "sinister" then
+            return val:find("sinister") ~= nil
+        elseif target == "phantom" then
+            return val:find("phantom") ~= nil or val:find("endtimes") ~= nil
+        elseif target == "zombie" then
+            return val:find("zombie") ~= nil
+        elseif target == "bluespruce" then
+            return val:find("spruce") ~= nil or val:find("bspruce") ~= nil
+        elseif target == "elm" then
+            return val:find("elm") ~= nil
+        elseif target == "birch" then
+            return val:find("birch") ~= nil
+        elseif target == "cherry" then
+            return val:find("cherry") ~= nil
+        elseif target == "koa" then
+            return val:find("koa") ~= nil
+        elseif target == "palm" then
+            return val:find("palm") ~= nil
+        elseif target == "walnut" then
+            return val:find("walnut") ~= nil
+        elseif target == "fir" then
+            return val:find("fir") ~= nil
+        elseif target == "pine" then
+            return val:find("pine") ~= nil
+        elseif target == "oak" then
+            return val == "oak" or val == "generic"
+        elseif target == "generic" then
+            return val == "generic" or val == "oak"
+        else
+            return val == target or val:find(target, 1, true) ~= nil
+        end
     end
 
     local ws = tree:FindFirstChild("WoodSection")
-    if not ws then return false end
+    if not ws or not ws:IsA("BasePart") then return false end
 
     local p = ws.Position
     local r, g, b = ws.Color.R, ws.Color.G, ws.Color.B
 
-    if target == "frost" or target == "snowglow" then
-        return (p.Y > 300 and p.Z > 2500) or (r > 230 and g > 225 and b > 225)
+    if target == "frost" then
+        return (p.Y > 300 and p.Z > 2500) and (r > 210 and g > 210 and b > 210)
+    elseif target == "snowglow" then
+        return (p.Y >= -30 and p.Y <= 30 and p.X >= -1350 and p.X <= -950 and p.Z >= -1250 and p.Z <= -700) or (r > 210 and g > 150 and b < 100)
     elseif target == "volcano" then
-        return (p.Y > 300 and p.X < -1400) or (r > 180 and g < 60 and b < 50)
+        return (p.Y > 500 and p.X < -1300) or (r > 170 and g < 70 and b < 60)
     elseif target == "cavecrawler" then
-        return (p.Y < -50) or (b > 80 and r < 30 and g < 40)
+        return (p.Y < -40) or (b > 70 and r < 40 and g < 50)
     elseif target == "cherry" then
-        return (p.Z > 650 and p.Z < 1550 and p.X > 50 and p.X < 450 and r > 90 and g < 80)
+        return (p.Z > 600 and p.Z < 1600 and p.X > 0 and p.X < 700 and r > 90 and r < 130 and g < 80)
     elseif target == "goldswampy" then
-        return (p.X < -700 and p.X > -1500 and p.Z < -600 and p.Z > -1200) or (r > 220 and g > 160 and b < 80)
+        return (p.Y >= 115 and p.Y <= 170 and p.X >= -1500 and p.X <= -750 and p.Z >= -1550 and p.Z <= -450 and r > 95 and r < 125 and g > 75 and g < 100)
+    elseif target == "greenswampy" then
+        return (p.Y >= 115 and p.Y <= 170 and p.X >= -1500 and p.X <= -750 and p.Z >= -1550 and p.Z <= -450 and g > 55 and r < 50)
     elseif target == "palm" then
-        return (p.Y < 5 and (p.X > 1800 or p.Z < -1400))
+        return (p.Y < 25 and (p.X > 1700 or p.Z < -1300) and r > 185 and g > 175)
     elseif target == "koa" then
-        return (p.X > 4000 and p.Z > -1000)
-    elseif target == "fir" then
-        return (p.Z > 1800 and p.Z < 2500 and p.X > 1000)
+        return (p.X > 4200 and p.Z > -1000 and p.Z < 600 and r > 160 and r < 190)
+    elseif target == "walnut" then
+        return (p.Z < -1000 and p.X > -600 and p.X < 900 and r > 140 and r < 180 and g > 80 and g < 115)
     elseif target == "birch" then
-        return (r > 240 and g > 240 and b < 215)
+        return (r > 240 and g > 240 and b > 180)
+    elseif target == "fir" then
+        return (p.Z > 1000 and p.Z < 2600 and p.X > 200 and p.X < 1600)
+    elseif target == "pine" then
+        return (p.Z > 1000 and p.Z < 2600 and p.X > 300 and p.X < 1600)
     elseif target == "oak" or target == "generic" then
         return not isSpecialTree(p, r, g, b, val)
     end
 
+    return false
+end
+
+local function isUncutTree(tree)
+    if not tree or not tree.Parent or not tree:IsDescendantOf(workspace) then return false end
+    if not tree:FindFirstChild("CutEvent") then return false end
+    if tree:FindFirstChild("RootCut") then return false end
+    for _, ch in ipairs(tree:GetChildren()) do
+        if ch.Name == "WoodSection" then
+            return true
+        end
+    end
     return false
 end
 
@@ -285,7 +435,7 @@ local function findTreeLowest(targetType, maxDist)
     for _, region in ipairs(workspace:GetChildren()) do
         if region.Name == "TreeRegion" then
             for _, tree in ipairs(region:GetChildren()) do
-                if tree:FindFirstChild("CutEvent") and matchesTreeClass(tree, targetType) then
+                if tree:FindFirstChild("CutEvent") and isUncutTree(tree) and matchesTreeClass(tree, targetType) then
                     local lowestSection = findLowestSection(tree)
                     if lowestSection then
                         local d = (lowestSection.Position - root.Position).Magnitude
@@ -302,11 +452,12 @@ local function findTreeLowest(targetType, maxDist)
     return bestTree, bestSection, shortestDist
 end
 
-local function strikeSectionLegit(tree, section, axe)
+local function strikeSectionLegit(tree, section, axe, treeClassName, hitIndex)
     if not tree or not section or not axe then return false, 0.5 end
     local cutEvent = tree:FindFirstChild("CutEvent")
     local sectionId = section:FindFirstChild("ID")
     if not cutEvent or not sectionId then return false, 0.5 end
+    if tree:FindFirstChild("RootCut") then return false, 0.5 end
 
     local char = lp.Character
     if not char then return false, 0.5 end
@@ -317,34 +468,37 @@ local function strikeSectionLegit(tree, section, axe)
     end
     if axe.Parent ~= char then return false, 0.5 end
 
-    local _, stats = getToolAxeInfo(axe)
+    local _, stats = getToolAxeInfo(axe, treeClassName)
 
     local height = 0.5
     if section.ClassName == "Part" or section.ClassName == "MeshPart" then
         local sy = section.Size and section.Size.Y or 2
-        height = math.clamp(sy * 0.3, 0.2, math.max(0.4, sy - 0.2))
+        height = math.clamp(sy * 0.35, 0.2, math.max(0.4, sy - 0.2))
     end
 
-    local waitTime = stats.cooldown or 0.65
+    local idx = hitIndex or 1
+    local face = (idx % 2 == 1) and Vector3.new(0, 0, -1) or Vector3.new(0, 0, 1)
 
     RemoteProxy:FireServer(cutEvent, {
         ["sectionId"] = sectionId.Value,
-        ["faceVector"] = Vector3.new(0, 0, -1),
+        ["faceVector"] = face,
         ["height"] = height,
         ["hitPoints"] = stats.damage,
-        ["cooldown"] = stats.cooldown,
+        ["cooldown"] = stats.wireCooldown,
         ["cuttingClass"] = "Axe",
         ["tool"] = axe
     })
-    return true, waitTime
+    return true, stats.swingCooldown + 0.05
 end
 
 local function smartBringLog(log, savedPos)
-    local main = nil
-    for _, p in ipairs(log:GetChildren()) do
-        if p.ClassName == "Part" or p.ClassName == "MeshPart" then
-            main = p
-            break
+    local main = log:FindFirstChild("WoodSection") or log:FindFirstChild("Main")
+    if not main then
+        for _, p in ipairs(log:GetChildren()) do
+            if isRealBasePart(p) then
+                main = p
+                break
+            end
         end
     end
     if not main then return false end
@@ -352,31 +506,52 @@ local function smartBringLog(log, savedPos)
     local _, root = getChar()
     if not root then return false end
 
-    local dist = (main.Position - root.Position).Magnitude
-    if dist > 200 then
-        safeTeleport(main.CFrame + Vector3.new(0, 3, 0))
+    local targetLanding = savedPos.Position + Vector3.new(math.random(-3, 3), 2.5, math.random(-3, 3))
+
+    for attempt = 1, 3 do
+        local curDist = (main.Position - savedPos.Position).Magnitude
+        if curDist <= 12 then
+            return true
+        end
+
+        -- 1. Teleport player on top of the log to enter interaction range
+        safeTeleport(CFrame.new(main.Position.X, main.Position.Y + 3.5, main.Position.Z))
         task.wait(0.12)
-    end
 
-    ClientIsDragging:FireServer(log)
-    task.wait(0.08)
+        -- 2. Claim drag on the log twice to solidly claim network ownership
+        ClientIsDragging:FireServer(log)
+        task.wait(0.06)
+        ClientIsDragging:FireServer(log)
+        task.wait(0.06)
 
-    if dist > 200 then
+        -- 3. Teleport player back to destination
         safeTeleport(savedPos)
+        task.wait(0.06)
+
+        -- 4. Move all parts of the log to landing spot
+        local delta = targetLanding - main.Position
+        for _, p in ipairs(log:GetChildren()) do
+            if isRealBasePart(p) then
+                p.CFrame = p.CFrame + delta
+                p.Velocity = Vector3.new(0, 0, 0)
+                p.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            end
+        end
+
+        -- 5. Confirm drag at landing spot while player is standing right next to it
+        ClientIsDragging:FireServer(log)
         task.wait(0.08)
-    end
+        ClientIsDragging:FireServer(log)
+        task.wait(0.1)
 
-    local targetLanding = savedPos.Position + Vector3.new(math.random(-3, 3), 3, math.random(-3, 3))
-    local delta = targetLanding - main.Position
-
-    for _, p in ipairs(log:GetChildren()) do
-        if p.ClassName == "Part" or p.ClassName == "MeshPart" then
-            p.CFrame = p.CFrame + delta
-            p.Velocity = Vector3.new(0, 0, 0)
-            p.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        -- 6. Verify if it arrived successfully
+        if (main.Position - savedPos.Position).Magnitude <= 18 then
+            return true
         end
     end
-    return true
+
+    safeTeleport(savedPos)
+    return (main.Position - savedPos.Position).Magnitude <= 18
 end
 
 local function executeWoodMagnet()
@@ -390,7 +565,7 @@ local function executeWoodMagnet()
     local savedPos = root.CFrame
     local broughtCount = 0
 
-    Non:Notify({Title = "Tree", Content = "Executing log fetch sequence...", Icon = "magnet", Duration = 2})
+    Non:Notify({Title = "Bring log", Content = "Bringing logs to your position (100% Guaranteed)...", Icon = "magnet", Duration = 2})
 
     task.spawn(function()
         for _, log in ipairs(logs) do
@@ -398,10 +573,14 @@ local function executeWoodMagnet()
             local ownerStr = o and tostring(o.Value) or ""
             local isEligible = false
 
-            if bringFilterMode == "All Logs (of all the players)" then
+            if bringFilterMode == "All Players Logs" then
                 isEligible = true
+            elseif bringFilterMode == "My Logs Only" then
+                if isPlayerOwnedItem(log) then
+                    isEligible = true
+                end
             else
-                if not o or not o.Value or ownerStr:find("Unreadable") or ownerStr == "nil" or ownerStr:find(lp.Name) then
+                if isPlayerOwnedItem(log) or not o or not o.Value or ownerStr:find("Unreadable") or ownerStr == "nil" or ownerStr == "" then
                     isEligible = true
                 end
             end
@@ -410,15 +589,222 @@ local function executeWoodMagnet()
                 local success = smartBringLog(log, savedPos)
                 if success then
                     broughtCount = broughtCount + 1
-                    task.wait(0.15)
+                    task.wait(0.08)
                 end
             end
         end
 
         safeTeleport(savedPos)
         Non:Notify({
-            Title = "Fetch Complete",
-            Content = string.format("Successfully brought %d logs.", broughtCount),
+            Title = "Bring Complete",
+            Content = string.format("Successfully brought %d logs (100%% guaranteed).", broughtCount),
+            Icon = "circle-check",
+            Duration = 4
+        })
+    end)
+end
+
+local function smartBringItem(item, savedPos)
+    local main = getItemMainPart(item)
+    if not main or main.Anchored then return false end
+
+    local _, root = getChar()
+    if not root then return false end
+
+    local targetLanding = savedPos.Position + Vector3.new(math.random(-3, 3), 2.5, math.random(-3, 3))
+
+    for attempt = 1, 3 do
+        local curDist = (main.Position - savedPos.Position).Magnitude
+        if curDist <= 12 then
+            return true
+        end
+
+        safeTeleport(CFrame.new(main.Position.X, main.Position.Y + 3.5, main.Position.Z))
+        task.wait(0.12)
+
+        ClientIsDragging:FireServer(item)
+        task.wait(0.06)
+        ClientIsDragging:FireServer(item)
+        task.wait(0.06)
+
+        safeTeleport(savedPos)
+        task.wait(0.06)
+
+        local delta = targetLanding - main.Position
+        for _, p in ipairs(item:GetDescendants()) do
+            if isRealBasePart(p) and typeof(p.CFrame) == "CFrame" then
+                local cf = p.CFrame
+                p.CFrame = CFrame.new(cf.X + delta.X, cf.Y + delta.Y, cf.Z + delta.Z)
+                p.Velocity = Vector3.new(0, 0, 0)
+                p.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            end
+        end
+
+        ClientIsDragging:FireServer(item)
+        task.wait(0.08)
+        ClientIsDragging:FireServer(item)
+        task.wait(0.1)
+
+        if (main.Position - savedPos.Position).Magnitude <= 18 then
+            return true
+        end
+    end
+
+    safeTeleport(savedPos)
+    return (main.Position - savedPos.Position).Magnitude <= 18
+end
+
+local function isEligibleLooseItem(item, filterType, ownershipMode)
+    if not item or not item.Parent then return false end
+    if item:FindFirstChild("DriveSeat") or item.Name:lower():find("truck") or item.Name:lower():find("trailer") then
+        return false
+    end
+    local main = getItemMainPart(item)
+    if not main or main.Anchored then return false end
+
+    local o = item:FindFirstChild("Owner")
+    local ownerStr = o and tostring(o.Value) or ""
+
+    -- Never touch store display/decorative items (Unreadable_name)
+    if ownerStr:find("Unreadable") then
+        return false
+    end
+
+    if ownershipMode ~= "All Items (Forced)" then
+        if not isPlayerOwnedItem(item) then
+            if o and o.Value and ownerStr ~= "nil" and not ownerStr:find(lp.Name) then
+                return false
+            end
+        end
+    end
+
+    local iname = item:FindFirstChild("ItemName")
+    local inameStr = iname and tostring(iname.Value) or ""
+    local tn = item:FindFirstChild("ToolName")
+    local tnStr = tn and tostring(tn.Value) or ""
+    local isDraggable = item:FindFirstChild("DraggableItem") ~= nil
+
+    if filterType == "Gifts & Presents" then
+        return inameStr:lower():find("gift") ~= nil or inameStr:lower():find("present") ~= nil or item.Name:lower():find("gift") ~= nil or item.Name:lower():find("present") ~= nil
+    elseif filterType == "Tools & Axes" then
+        return tnStr ~= "" or inameStr:lower():find("axe") ~= nil or item.Name:lower():find("axe") ~= nil or item:FindFirstChild("CuttingTool") ~= nil
+    elseif filterType == "Furniture & Boxes" then
+        return (inameStr ~= "" and tnStr == "") or isDraggable
+    else -- "All Loose Items"
+        return isDraggable or inameStr ~= "" or tnStr ~= ""
+    end
+end
+
+local function executeItemMagnet()
+    local _, root = getChar()
+    if not root then return end
+
+    local pm = workspace:FindFirstChild("PlayerModels")
+    if not pm then return end
+
+    local savedPos = root.CFrame
+    local broughtCount = 0
+
+    Non:Notify({
+        Title = "Bring item",
+        Content = string.format("Bringing %s to your position...", itemFilterMode),
+        Icon = "package",
+        Duration = 2
+    })
+
+    task.spawn(function()
+        for _, item in ipairs(pm:GetChildren()) do
+            if isEligibleLooseItem(item, itemFilterMode, itemOwnershipMode) then
+                local success = smartBringItem(item, savedPos)
+                if success then
+                    broughtCount = broughtCount + 1
+                    task.wait(0.12)
+                end
+            end
+        end
+
+        safeTeleport(savedPos)
+        Non:Notify({
+            Title = "Items Brought",
+            Content = string.format("Successfully brought %d items to your position.", broughtCount),
+            Icon = "circle-check",
+            Duration = 4
+        })
+    end)
+end
+
+local function executePlankMagnet()
+    local _, root = getChar()
+    if not root then return end
+
+    local pm = workspace:FindFirstChild("PlayerModels")
+    if not pm then return end
+
+    local savedPos = root.CFrame
+    local broughtCount = 0
+
+    Non:Notify({
+        Title = "Bring Plank",
+        Content = string.format("Bringing %s planks to your position...", selectedPlankType),
+        Icon = "package",
+        Duration = 2
+    })
+
+    task.spawn(function()
+        for _, item in ipairs(pm:GetChildren()) do
+            if item.Name == "Plank" then
+                local o = item:FindFirstChild("Owner")
+                local ownerStr = o and tostring(o.Value) or ""
+                local isEligible = false
+
+                if plankOwnershipMode == "All Planks (Forced)" then
+                    isEligible = true
+                else
+                    if isPlayerOwnedItem(item) or not o or not o.Value or ownerStr == "nil" or ownerStr:find("Unreadable") then
+                        isEligible = true
+                    end
+                end
+
+                if isEligible and selectedPlankType ~= "All" then
+                    local tc = item:FindFirstChild("TreeClass")
+                    local tcStr = tc and tostring(tc.Value):lower() or ""
+                    local targetPlank = selectedPlankType:lower()
+                    if targetPlank == "oak" or targetPlank == "generic" then
+                        if tcStr ~= "oak" and tcStr ~= "generic" then
+                            isEligible = false
+                        end
+                    elseif targetPlank == "goldswampy" then
+                        if not tcStr:find("gold") then isEligible = false end
+                    elseif targetPlank == "greenswampy" then
+                        if not tcStr:find("green") and not (tcStr:find("swamp") and not tcStr:find("gold")) then isEligible = false end
+                    elseif targetPlank == "frost" then
+                        if not tcStr:find("frost") and not tcStr:find("ice") then isEligible = false end
+                    elseif targetPlank == "snowglow" then
+                        if not tcStr:find("snowglow") and not (tcStr:find("glow") and not tcStr:find("frost")) then isEligible = false end
+                    else
+                        if not tcStr:find(targetPlank, 1, true) then
+                            isEligible = false
+                        end
+                    end
+                end
+
+                if isEligible then
+                    local main = getItemMainPart(item)
+                    if main and not main.Anchored then
+                        local success = smartBringItem(item, savedPos)
+                        if success then
+                            broughtCount = broughtCount + 1
+                            task.wait(0.08)
+                        end
+                    end
+                end
+            end
+        end
+
+        safeTeleport(savedPos)
+        Non:Notify({
+            Title = "Planks Brought",
+            Content = string.format("Successfully brought %d refined planks to your position.", broughtCount),
             Icon = "circle-check",
             Duration = 4
         })
@@ -431,7 +817,7 @@ local function sellLogsAtWoodRUs()
     local sellPos = Vector3.new(315, -1.5, 85.5)
     local count = 0
 
-    Non:Notify({Title = "Auto-Sell", Content = "Routing logs to vendor chute...", Duration = 2})
+    Non:Notify({Title = "Selling Logs", Content = "Sending logs to Wood R Us chute...", Icon = "badge-dollar-sign", Duration = 2})
 
     task.spawn(function()
         for _, log in ipairs(lm:GetChildren()) do
@@ -439,10 +825,14 @@ local function sellLogsAtWoodRUs()
             local ownerStr = o and tostring(o.Value) or ""
             local isEligible = false
 
-            if bringFilterMode == "All Logs (Forced)" then
+            if bringFilterMode == "All Players Logs" then
                 isEligible = true
+            elseif bringFilterMode == "My Logs Only" then
+                if isPlayerOwnedItem(log) then
+                    isEligible = true
+                end
             else
-                if not o or not o.Value or ownerStr:find(lp.Name) or ownerStr:find("Unreadable") or ownerStr == "nil" then
+                if isPlayerOwnedItem(log) or not o or not o.Value or ownerStr:find("Unreadable") or ownerStr == "nil" or ownerStr == "" then
                     isEligible = true
                 end
             end
@@ -473,7 +863,78 @@ local function sellLogsAtWoodRUs()
         end
         Non:Notify({
             Title = "Logs Sold",
-            Content = string.format("Injected %d logs into Wood R Us.", count),
+            Content = string.format("Sent %d logs into the Wood R Us sell chute.", count),
+            Icon = "circle-check",
+            Duration = 4
+        })
+    end)
+end
+
+local function sellPlanksAtWoodRUs()
+    local pm = workspace:FindFirstChild("PlayerModels")
+    if not pm then return end
+    local sellPos = Vector3.new(315, -1.5, 85.5)
+    local count = 0
+
+    Non:Notify({Title = "Selling Planks", Content = "Sending planks to Wood R Us chute...", Icon = "badge-dollar-sign", Duration = 2})
+
+    task.spawn(function()
+        for _, item in ipairs(pm:GetChildren()) do
+            if item.Name == "Plank" then
+                local o = item:FindFirstChild("Owner")
+                local ownerStr = o and tostring(o.Value) or ""
+                local isEligible = false
+
+                if plankOwnershipMode == "All Planks (Forced)" then
+                    isEligible = true
+                else
+                    if isPlayerOwnedItem(item) or not o or not o.Value or ownerStr == "nil" or ownerStr:find("Unreadable") then
+                        isEligible = true
+                    end
+                end
+
+                if isEligible and selectedPlankType ~= "All" then
+                    local tc = item:FindFirstChild("TreeClass")
+                    local tcStr = tc and tostring(tc.Value):lower() or ""
+                    local targetPlank = selectedPlankType:lower()
+                    if targetPlank == "oak" or targetPlank == "generic" then
+                        if tcStr ~= "oak" and tcStr ~= "generic" then isEligible = false end
+                    elseif targetPlank == "goldswampy" then
+                        if not tcStr:find("gold") then isEligible = false end
+                    elseif targetPlank == "greenswampy" then
+                        if not tcStr:find("green") and not (tcStr:find("swamp") and not tcStr:find("gold")) then isEligible = false end
+                    elseif targetPlank == "frost" then
+                        if not tcStr:find("frost") and not tcStr:find("ice") then isEligible = false end
+                    elseif targetPlank == "snowglow" then
+                        if not tcStr:find("snowglow") and not (tcStr:find("glow") and not tcStr:find("frost")) then isEligible = false end
+                    else
+                        if not tcStr:find(targetPlank, 1, true) then isEligible = false end
+                    end
+                end
+
+                if isEligible then
+                    local main = getItemMainPart(item)
+                    if main and not main.Anchored then
+                        ClientIsDragging:FireServer(item)
+                        task.wait(0.04)
+                        local delta = sellPos - main.Position
+                        for _, p in ipairs(item:GetDescendants()) do
+                            if isRealBasePart(p) and typeof(p.CFrame) == "CFrame" then
+                                local cf = p.CFrame
+                                p.CFrame = CFrame.new(cf.X + delta.X, cf.Y + delta.Y, cf.Z + delta.Z)
+                                p.Velocity = Vector3.new(0, -10, 0)
+                                p.AssemblyLinearVelocity = Vector3.new(0, -10, 0)
+                            end
+                        end
+                        count = count + 1
+                        task.wait(0.08)
+                    end
+                end
+            end
+        end
+        Non:Notify({
+            Title = "Planks Sold",
+            Content = string.format("Sent %d planks into the Wood R Us sell chute.", count),
             Icon = "circle-check",
             Duration = 4
         })
@@ -483,15 +944,15 @@ end
 local function expandPlotToMax()
     local myProp = getMyPlot()
     if not myProp then
-        return Non:Notify({Title = "Error", Content = "No active plot found in server.", Icon = "alert-triangle", Duration = 3})
+        return Non:Notify({Title = "Error", Content = "No claimed plot found on this server.", Icon = "alert-triangle", Duration = 3})
     end
 
     local origin = myProp:FindFirstChild("OriginSquare")
     if not origin then
-        return Non:Notify({Title = "Error", Content = "OriginSquare missing from plot.", Icon = "alert-triangle", Duration = 3})
+        return Non:Notify({Title = "Error", Content = "OriginSquare not found in plot.", Icon = "alert-triangle", Duration = 3})
     end
 
-    Non:Notify({Title = "Plot Expansion", Content = "Bypassing parcel grid limits...", Icon = "maximize-2", Duration = 3})
+    Non:Notify({Title = "Plot Expansion", Content = "Expanding plot to maximum 5x5 grid...", Icon = "maximize-2", Duration = 3})
 
     task.spawn(function()
         local count = 0
@@ -506,8 +967,8 @@ local function expandPlotToMax()
             end
         end
         Non:Notify({
-            Title = "Expansion Complete",
-            Content = string.format("Unlocked 5x5 grid (%d parcels).", count),
+            Title = "Plot Maximized",
+            Content = string.format("Plot expanded to 5x5 grid (%d parcels)! Fully unlocked.", count),
             Icon = "circle-check",
             Duration = 4
         })
@@ -529,7 +990,7 @@ local function chopUntilFell(targetType)
     local tree, section, dist = findTreeLowest(targetType)
     local char, root, hum = getChar()
     if not tree or not section or not root then
-        Non:Notify({Title = "Not Found", Content = "No matching targets for: " .. targetType, Icon = "alert-triangle", Duration = 3})
+        Non:Notify({Title = "Not Found", Content = "No matching targets for: " .. tostring(targetType), Icon = "alert-triangle", Duration = 3})
         return
     end
 
@@ -540,10 +1001,10 @@ local function chopUntilFell(targetType)
     local cutPos = section.Position
 
     if dist > 14 then
-        local targetPos = cutPos + Vector3.new(2.8, 0, 2.8)
+        local targetPos = cutPos + Vector3.new(2.5, 0.5, 2.5)
         local lookTarget = Vector3.new(cutPos.X, targetPos.Y, cutPos.Z)
         safeTeleport(CFrame.lookAt(targetPos, lookTarget))
-        task.wait(0.2)
+        task.wait(0.25)
     end
 
     Non:Notify({
@@ -563,6 +1024,10 @@ local function chopUntilFell(targetType)
                 break
             end
 
+            if tree:FindFirstChild("RootCut") then
+                break
+            end
+
             if not section or not section.Parent or not section:IsDescendantOf(tree) then
                 section = findLowestSection(tree)
                 if not section then
@@ -578,7 +1043,7 @@ local function chopUntilFell(targetType)
             local activeAxe = ensureAxeEquipped()
             if not activeAxe then break end
 
-            local ok, waitTime = strikeSectionLegit(tree, section, activeAxe)
+            local ok, waitTime = strikeSectionLegit(tree, section, activeAxe, treeClassName, hits + 1)
             if not ok then break end
             hits = hits + 1
 
@@ -587,7 +1052,9 @@ local function chopUntilFell(targetType)
 
         isManualChopping = false
 
-        if not tree or not tree.Parent or not tree:IsDescendantOf(workspace) or not findLowestSection(tree) then
+        local felled = not tree or not tree.Parent or not tree:IsDescendantOf(workspace) or (tree:FindFirstChild("RootCut") ~= nil) or (findLowestSection(tree) == nil)
+
+        if felled then
             Non:Notify({
                 Title = "Target Destroyed",
                 Content = string.format("Felled %s tree in %d hits.", treeClassName, hits),
@@ -606,35 +1073,35 @@ local function chopUntilFell(targetType)
 end
 
 local Win = Non:CreateWindow({
-    Title = "RealOrCake / LT2",
-    Author = "",
-    Folder = "RealOrCake",
+    Title = "RealOrCake Hub | LT2",
+    Author = "Leo",
+    Folder = "RealOrCake_LT2",
     Theme = "Dark",
     Size = { 690, 530 },
-    OpenButton = { Title = "LT2", Draggable = true }
+    OpenButton = { Title = "RealOrCake", Draggable = true }
 })
 
 local MainSec = Win:Section({ Title = "Bring" })
-local WorldSec = Win:Section({ Title = "Locations" })
-local ExtraSec = Win:Section({ Title = "Dupe & Exploits" })
-local PlayerSec = Win:Section({ Title = "Settings" })
+local WorldSec = Win:Section({ Title = "Locations / TPs" })
+local ExtraSec = Win:Section({ Title = "Extra" })
+local PlayerSec = Win:Section({ Title = "Player & Settings" })
 
-local treeTab = MainSec:Tab({ Title = "Fell trees", Icon = "" })
-local woodTab = MainSec:Tab({ Title = "Bring Logs", Icon = "" })
-local tpTab = WorldSec:Tab({ Title = "Teleports", Icon = "" })
-local extraTab = ExtraSec:Tab({ Title = "Dupe and slot", Icon = "" })
-local miscTab = PlayerSec:Tab({ Title = "Misc", Icon = "" })
+local treeTab = MainSec:Tab({ Title = "Bring Tree", Icon = "trees" })
+local woodTab = MainSec:Tab({ Title = "Bring Items", Icon = "package" })
+local tpTab = WorldSec:Tab({ Title = "Teleports", Icon = "map-pin" })
+local extraTab = ExtraSec:Tab({ Title = "Extra / Dupe", Icon = "sparkles" })
+local miscTab = PlayerSec:Tab({ Title = "Settings", Icon = "sliders" })
 
 treeTab:Section("Auto-Chop")
 
 local treeOptions = {
-    "All (Nearest)", "Oak", "Cherry", "Frost", "Volcano", 
-    "CaveCrawler", "Palm", "Fir", "GoldSwampy", "Koa", "SnowGlow", "Generic"
+    "All (Nearest)", "Oak", "Birch", "Cherry", "Fir", "Pine", "Walnut", "Koa", "Palm",
+    "Frost", "SnowGlow", "Volcano", "GoldSwampy", "GreenSwampy", "CaveCrawler",
+    "Spooky", "Sinister", "Phantom", "Zombie", "BlueSpruce", "Elm", "Generic"
 }
 
 treeTab:Dropdown({
     Title = "Target Tree",
-    Desc = "Select the tree to be fell",
     Values = treeOptions,
     Default = "All (Nearest)",
     Callback = function(val)
@@ -644,7 +1111,6 @@ treeTab:Dropdown({
 
 treeTab:Button({
     Title = "Auto-Chop",
-    Desc = "Teleports and target tree until fell",
     Icon = "zap",
     Callback = function()
         chopUntilFell(selectedTreeType)
@@ -653,7 +1119,6 @@ treeTab:Button({
 
 treeTab:Button({
     Title = "Stop Current Tree",
-    Desc = "Instantly aborts automated routines",
     Icon = "x-circle",
     Callback = function()
         if isManualChopping then
@@ -663,66 +1128,154 @@ treeTab:Button({
     end
 })
 
-woodTab:Section("Bring")
+treeTab:Section("Bring Log")
 
-woodTab:Dropdown({
+treeTab:Dropdown({
     Title = "Ownership Filter",
-    Desc = "Filter parameters for log manipulation",
-    Values = {"My Logs & Unowned", "All Logs (of all the players)"},
-    Default = "My Logs & Unowned",
+    Values = {"My Logs Only", "My Logs & Unowned", "All Logs (Forced)"},
+    Default = "My Logs Only",
     Callback = function(v)
         bringFilterMode = v
     end
 })
 
-woodTab:Button({
-    Title = "Bring Logs",
-    Desc = "Teleports valid logs directly to your local coordinates",
+treeTab:Button({
+    Title = "Bring Cut Logs",
     Icon = "magnet",
     Callback = function()
         executeWoodMagnet()
     end
 })
 
-woodTab:Toggle({
-    Title = "Auto Bring Logs",
-    Desc = "Continuously fetches loose logs every 3.5 seconds",
+treeTab:Toggle({
+    Title = "Auto-Bring Logs",
     Default = false,
     Callback = function(state)
         autoMagnetActive = state
         if state then
-            Non:Notify({Title = "Loop Enabled", Content = "Continuous log fetch active.", Icon = "circle-check", Duration = 3})
+            Non:Notify({Title = "Auto-Bring", Content = "Continuous log magnet active.", Icon = "circle-check", Duration = 3})
         end
     end
 })
 
-woodTab:Section("Vendor Injection")
+treeTab:Section("Bring Plank")
 
-woodTab:Button({
-    Title = "Auto-Sell Logs",
-    Desc = "Forces logs directly into the vendor disposal chute",
+local plankOptions = {
+    "All", "Oak", "Birch", "Cherry", "Fir", "Pine", "Walnut", "Koa", "Palm",
+    "Frost", "SnowGlow", "Volcano", "GoldSwampy", "GreenSwampy", "CaveCrawler",
+    "Spooky", "Sinister", "Phantom", "Zombie", "BlueSpruce", "Elm", "Generic"
+}
+
+treeTab:Dropdown({
+    Title = "Plank Wood",
+    Values = plankOptions,
+    Default = "All",
+    Callback = function(val)
+        selectedPlankType = val
+    end
+})
+
+treeTab:Dropdown({
+    Title = "Plank Ownership Filter",
+    Values = {"My Planks & Unowned", "All Planks (Forced)"},
+    Default = "My Planks & Unowned",
+    Callback = function(val)
+        plankOwnershipMode = val
+    end
+})
+
+treeTab:Button({
+    Title = "Bring Planks",
+    Icon = "package",
+    Callback = function()
+        executePlankMagnet()
+    end
+})
+
+treeTab:Toggle({
+    Title = "Auto-Bring Planks",
+    Default = false,
+    Callback = function(state)
+        autoPlankMagnetActive = state
+        if state then
+            Non:Notify({Title = "Auto-Bring Planks", Content = "Continuous plank magnet active.", Icon = "circle-check", Duration = 3})
+        end
+    end
+})
+
+treeTab:Section("Wood R Us Store")
+
+treeTab:Button({
+    Title = "Sell Logs at Wood R Us",
+    Icon = "badge-dollar-sign",
     Callback = function()
         sellLogsAtWoodRUs()
     end
 })
 
-tpTab:Section("TP Plot")
-
-tpTab:Button({
-    Title = "Teleport to Personal Plot",
-    Desc = "Direct localization to your active property slot",
-    Icon = "home",
+treeTab:Button({
+    Title = "Sell Planks at Wood R Us",
+    Icon = "badge-dollar-sign",
     Callback = function()
-        local ok = teleportToMyPlot()
-        if ok then
-            Non:Notify({Title = "Teleported", Content = "Arrived at your property.", Icon = "circle-check", Duration = 3})
-        else
-            Non:Notify({Title = "Error", Content = "Property slot not detected on server.", Icon = "alert-triangle", Duration = 3})
+        sellPlanksAtWoodRUs()
+    end
+})
+
+woodTab:Section("Bring Item")
+
+woodTab:Dropdown({
+    Title = "Item Filter Type",
+    Values = {"All Loose Items", "Gifts & Presents", "Tools & Axes", "Furniture & Boxes"},
+    Default = "All Loose Items",
+    Callback = function(v)
+        itemFilterMode = v
+    end
+})
+
+woodTab:Dropdown({
+    Title = "Item Ownership Filter",
+    Values = {"My Items & Unowned", "All Items (Forced)"},
+    Default = "My Items & Unowned",
+    Callback = function(v)
+        itemOwnershipMode = v
+    end
+})
+
+woodTab:Button({
+    Title = "Bring Loose Items",
+    Icon = "package",
+    Callback = function()
+        executeItemMagnet()
+    end
+})
+
+woodTab:Toggle({
+    Title = "Auto-Bring Items",
+    Default = false,
+    Callback = function(state)
+        autoItemMagnetActive = state
+        if state then
+            Non:Notify({Title = "Auto-Bring Items", Content = "Continuous item magnet active.", Icon = "circle-check", Duration = 3})
         end
     end
 })
 
-tpTab:Section("Waypoints")
+tpTab:Section("Base Management")
+
+tpTab:Button({
+    Title = "Teleport to My Plot",
+    Icon = "home",
+    Callback = function()
+        local ok = teleportToMyPlot()
+        if ok then
+            Non:Notify({Title = "Plot Teleport", Content = "Arrived at your active plot.", Icon = "circle-check", Duration = 3})
+        else
+            Non:Notify({Title = "Error", Content = "Could not find your claimed plot on this server.", Icon = "alert-triangle", Duration = 3})
+        end
+    end
+})
+
+tpTab:Section("Map Destinations")
 
 local waypoints = {
     ["Wood R Us (Shop)"]        = Vector3.new(268, 5, 67),
@@ -745,8 +1298,7 @@ local waypointNames = {
 }
 
 tpTab:Dropdown({
-    Title = "Destination Select",
-    Desc = "Choose map coordinate",
+    Title = "Selected Destination",
     Values = waypointNames,
     Default = "Wood R Us (Shop)",
     Callback = function(dest)
@@ -755,13 +1307,13 @@ tpTab:Dropdown({
 })
 
 tpTab:Button({
-    Title = "TP TP TP",
+    Title = "Travel to Destination",
     Icon = "navigation",
     Callback = function()
         if selectedWaypoint == "My Plot" then
             local ok = teleportToMyPlot()
             if ok then
-                Non:Notify({Title = "Teleported", Content = "Arrived at your property.", Icon = "circle-check", Duration = 3})
+                Non:Notify({Title = "Plot Teleport", Content = "Arrived at your active plot.", Icon = "circle-check", Duration = 3})
             else
                 Non:Notify({Title = "Error", Content = "No active plot found.", Icon = "alert-triangle", Duration = 3})
             end
@@ -770,7 +1322,7 @@ tpTab:Button({
             if pos then
                 local ok = safeTeleport(pos)
                 if ok then
-                    Non:Notify({Title = "Teleported", Content = "Arrived at " .. selectedWaypoint, Icon = "circle-check", Duration = 3})
+                    Non:Notify({Title = "Teleport", Content = "Arrived at " .. selectedWaypoint, Icon = "circle-check", Duration = 3})
                 end
             end
         end
@@ -779,21 +1331,15 @@ tpTab:Button({
 
 extraTab:Section("Plot")
 
-extraTab:Paragraph({
-    Title = "!! HOW TO USE IT !!",
-    Desc = "You need to buy the first plot, which costs $100"
-})
-
 extraTab:Button({
-    Title = "Unlock all plots",
-    Desc = "Forcibly expands property boundaries to maximum limits",
+    Title = "Max Plot Expansion",
     Icon = "maximize-2",
     Callback = function()
         expandPlotToMax()
     end
 })
 
-extraTab:Section("Dupe")
+extraTab:Section("DUPE")
 
 local selectedReloadSlot = "Current Active Slot"
 local reloadSlotOptions = {
@@ -825,7 +1371,7 @@ local function reloadPlotSlot(slot)
     if mayLoad then
         local canLoad, err = mayLoad:InvokeServer(lp)
         if not canLoad then
-            return false, err or "Cooldown active"
+            return false, err or "Cannot load right now (Cooldown active)"
         end
     end
     
@@ -841,7 +1387,7 @@ local isReloadCycleRunning = false
 
 local function triggerVoidAndReload()
     if isReloadCycleRunning then
-        Non:Notify({Title = "Busy", Content = "Reload cycle already in progress.", Icon = "clock", Duration = 3})
+        Non:Notify({Title = "Reload in Progress", Content = "Please wait for current reload cycle to finish.", Icon = "clock", Duration = 3})
         return
     end
     isReloadCycleRunning = true
@@ -850,12 +1396,13 @@ local function triggerVoidAndReload()
     local char, root, hum = getChar()
     
     Non:Notify({
-        Title = "Void Routine",
-        Content = string.format("Teleporting to void point. Injecting Slot %d on death...", targetSlot),
+        Title = "Void & Reload",
+        Content = string.format("Teleporting to void point. Reloading Slot %d on death...", targetSlot),
         Icon = "refresh-cw",
         Duration = 3
     })
     
+    -- 1. Send player directly to the exact point (78.2, -254.0, 56.9)
     if root then
         root.Velocity = Vector3.new(0, 0, 0)
         root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
@@ -868,6 +1415,7 @@ local function triggerVoidAndReload()
         local isDead = false
         local t0 = os.clock()
         
+        -- 2. Detect death
         while (os.clock() - t0) < 15 do
             if not startChar or not startChar.Parent then
                 isDead = true
@@ -884,27 +1432,28 @@ local function triggerVoidAndReload()
             task.wait(0.03)
         end
         
+        -- 3. If death occurred, reload the plot immediately
         if isDead then
             local ok, msg = reloadPlotSlot(targetSlot)
             if ok then
                 Non:Notify({
-                    Title = "Slot Reloaded",
-                    Content = string.format("Death verified. Slot %d restored.", targetSlot),
+                    Title = "Plot Reloaded",
+                    Content = string.format("Death detected! Slot %d reloaded.", targetSlot),
                     Icon = "circle-check",
                     Duration = 4
                 })
             else
                 Non:Notify({
-                    Title = "Reload Response",
-                    Content = tostring(msg or "Save file loaded."),
+                    Title = "Plot Reload Response",
+                    Content = tostring(msg or "Slot reloaded. Place plot manually if prompted."),
                     Icon = "info",
                     Duration = 4
                 })
             end
         else
             Non:Notify({
-                Title = "Void Routine",
-                Content = "No character termination detected.",
+                Title = "Void & Reload",
+                Content = "No death detected at destination.",
                 Icon = "alert-circle",
                 Duration = 3
             })
@@ -917,26 +1466,36 @@ end
 
 extraTab:Paragraph({
     Title = "Step 1",
-    Desc = "Load your slot and grab the axes to duplicate"
+    Desc = "Load your plot and equip the axes you want."
 })
 
 extraTab:Paragraph({
     Title = "Step 2",
-    Desc = "Select your current slot under -Target Save Slot- "
+    Desc = "Select your plot number in the menu dropdown below."
 })
 
 extraTab:Paragraph({
     Title = "Step 3",
-    Desc = "Press -Void & Reload Plot- then just place your plot wherever you want, and you're all set!"
+    Desc = "Click the second button (Void & Reload Plot)."
 })
+
 extraTab:Paragraph({
-    Title = "WARNING",
-    Desc = "Wait for the game's 60-second timer to run out before performing the dupe again (If the camera glitches, just reset your character)"
+    Title = "Step 4",
+    Desc = "Accept and wait for your plot to load."
+})
+
+extraTab:Paragraph({
+    Title = "Cooldown",
+    Desc = "Wait the 60-second in-game cooldown before attempting to reload your plot again."
+})
+
+extraTab:Paragraph({
+    Title = "Camera bug",
+    Desc = "If for any reason your camera bugs out, simply reset and it will be fixed."
 })
 
 extraTab:Dropdown({
     Title = "Target Save Slot",
-    Desc = "Select file index for automated reload",
     Values = reloadSlotOptions,
     Default = "Current Active Slot",
     Callback = function(slot)
@@ -946,23 +1505,40 @@ extraTab:Dropdown({
 
 extraTab:Button({
     Title = "Void & Reload Plot",
-    Desc = "Sends character to void coordinate and triggers save reload on death",
     Icon = "skull",
     Callback = function()
         triggerVoidAndReload()
     end
 })
 
-miscTab:Section("Execution Control")
+miscTab:Section("Character Movement")
+
+miscTab:Slider({
+    Title = "WalkSpeed",
+    Min = 16,
+    Max = 120,
+    Default = 16,
+    Step = 2,
+    Callback = function(v)
+        customWalkSpeed = v
+        local _, _, hum = getChar()
+        if hum then hum.WalkSpeed = v end
+    end
+})
+
+miscTab:Section("Script Control")
 
 miscTab:Button({
-    Title = "Unload Script & Clean UI",
-    Desc = "Terminates all background threads and closes the interface",
+    Title = "Close & Unload Script",
     Icon = "x-circle",
     Callback = function()
         autoMagnetActive = false
+        autoItemMagnetActive = false
+        autoPlankMagnetActive = false
         isManualChopping = false
-        Non:Notify({Title = "Unloaded", Content = "Cleaning up environment...", Icon = "info", Duration = 2})
+        local _, _, hum = getChar()
+        if hum then hum.WalkSpeed = 16 end
+        Non:Notify({Title = "Unloaded", Content = "Cleaning up and closing UI...", Icon = "info", Duration = 2})
         task.wait(0.3)
         if Win and Win.Destroy then
             pcall(function() Win:Destroy() end)
@@ -974,6 +1550,8 @@ local scriptRunning = true
 _G.LT2_NonUI_Cleanup = function()
     scriptRunning = false
     autoMagnetActive = false
+    autoItemMagnetActive = false
+    autoPlankMagnetActive = false
     isManualChopping = false
 end
 
@@ -986,9 +1564,39 @@ task.spawn(function()
     end
 end)
 
+task.spawn(function()
+    while scriptRunning do
+        if autoPlankMagnetActive then
+            pcall(executePlankMagnet)
+        end
+        task.wait(4.0)
+    end
+end)
+
+task.spawn(function()
+    while scriptRunning do
+        if autoItemMagnetActive then
+            pcall(executeItemMagnet)
+        end
+        task.wait(4.0)
+    end
+end)
+
+task.spawn(function()
+    while scriptRunning do
+        if customWalkSpeed > 16 then
+            local _, _, hum = getChar()
+            if hum and hum.WalkSpeed ~= customWalkSpeed then
+                hum.WalkSpeed = customWalkSpeed
+            end
+        end
+        task.wait(0.5)
+    end
+end)
+
 Non:Notify({
-    Title = "RealOrCake / LT2",
-    Content = "Environment injected successfully",
+    Title = "RealOrCake Hub | LT2",
+    Content = "Loaded successfully. Click 'RealOrCake' to toggle.",
     Icon = "circle-check",
     Duration = 5
 })
