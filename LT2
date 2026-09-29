@@ -1403,6 +1403,11 @@ local miscTab = PlayerSec:Tab({ Title = "Settings", Icon = "sliders" })
 
 treeTab:Section("Auto-Chop")
 
+treeTab:Paragraph({
+    Title = "WARNING",
+    Desc = "If you take damage while trying to chop down a tree, it is due to the server or your ping, you need to switch to a server where you don't take damage, as that is the only alternative I see for the time being."
+})
+
 local treeOptions = {
     "All (Nearest)", "Oak", "Birch", "Cherry", "Fir", "Pine", "Walnut", "Koa", "Palm",
     "Frost", "SnowGlow", "Volcano", "GoldSwampy", "GreenSwampy",
