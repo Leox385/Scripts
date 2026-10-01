@@ -1047,4 +1047,3 @@ _G.MatchaLootForgeHubCleanup = function()
 end
 
 say("RealOrCake", "Loaded successfully", "circlecheck")
-v
