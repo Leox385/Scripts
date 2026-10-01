@@ -16,6 +16,7 @@ local remotes = ReplicatedStorage:FindFirstChild("Remote")
 local STATE = {
     Running = true,
     AutoFarm = false,
+    InstaKill = false,
     AutoCollectOres = false,
     Zone27Loop = false,
     GodMode = false,
@@ -237,66 +238,100 @@ local function tweenToPosition(targetPos, duration, isLoop)
     pcall(function()
         hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
         hrp.Velocity = Vector3.new(0, 0, 0)
+        hrp.CFrame = CFrame.new(targetPos.X, endGroundY, targetPos.Z)
     end)
 
     return true
 end
 
-local function tweenToSpawn(duration, isLoop)
-    local targetPos = getSpawnPosition()
-    return tweenToPosition(targetPos, duration or 1.5, isLoop)
+local function getLiveDoorPart()
+    local touched = Workspace:FindFirstChild("TOUCHED")
+    local startDoor = touched and touched:FindFirstChild("StartDoor")
+    if startDoor then
+        if startDoor.ClassName == "Part" or startDoor.ClassName == "MeshPart" then
+            return startDoor
+        end
+        local p = startDoor:FindFirstChildWhichIsA("BasePart") or startDoor:FindFirstChild("TouchInterest", true)
+        if p and p.Parent and (p.Parent.ClassName == "Part" or p.Parent.ClassName == "MeshPart") then
+            return p.Parent
+        end
+    end
+    local wm = Workspace:FindFirstChild("WorldModel")
+    local sm = wm and wm:FindFirstChild("StageMap")
+    local boards = sm and sm:FindFirstChild("Boards")
+    local st1 = boards and boards:FindFirstChild("Stage_1")
+    if st1 and (st1.ClassName == "Part" or st1.ClassName == "MeshPart") then
+        return st1
+    end
+    return nil
 end
 
-local function getStagePosition(stageNum)
-    local targetPos = nil
-    pcall(function()
-        local sm = Workspace:FindFirstChild("WorldModel") and Workspace.WorldModel:FindFirstChild("StageMap")
-        local ep = sm and sm:FindFirstChild("EnemyPoint")
-        local stageModel = ep and ep:FindFirstChild("Stage_" .. stageNum)
-        if stageModel then
-            for _, child in ipairs(stageModel:GetChildren()) do
-                if child.ClassName == "Part" or child.ClassName == "MeshPart" then
-                    targetPos = child.Position
-                    break
-                end
-            end
+local function getStartDoorPosition()
+    local doorPart = getLiveDoorPart()
+    if doorPart then
+        local s, pPos = pcall(function() return doorPart.Position end)
+        if s and typeof(pPos) == "Vector3" then
+            return pPos
         end
-    end)
-    if not targetPos then
-        targetPos = STAGE_COORDS[stageNum]
     end
-    return targetPos
+    return Vector3.new(-3.4, 4.0, -10.0)
+end
+
+local function triggerDoorTouch()
+    local doorPart = getLiveDoorPart()
+    local _, hrp = getHRPPosition()
+    if doorPart and hrp and firetouchinterest then
+        pcall(function()
+            firetouchinterest(hrp, doorPart, 0)
+            task.wait(0.05)
+            firetouchinterest(hrp, doorPart, 1)
+        end)
+    end
 end
 
 local function teleportToStage(stageNum)
-    local pos = getStagePosition(stageNum)
-    if pos and teleportTo(pos) then
-        say("Teleport", "Teleported to Zone " .. stageNum, "circlecheck")
-    else
-        say("Teleport", "Failed to teleport to Zone " .. stageNum, "circlex")
-    end
-end
+    local targetPos = STAGE_COORDS[stageNum]
+    if not targetPos then return false end
 
-local function getBestTrainArea()
-    local rebirths = 0
     pcall(function()
-        local eco = lp:FindFirstChild("Eco")
-        if eco and eco:FindFirstChild("rebirth") then
-            rebirths = tonumber(eco.rebirth.Value) or 0
+        local tu = require(ReplicatedStorage.Utils.TranslateUtils)
+        if tu and tu.ToStage and lp.Character then
+            tu.ToStage(lp.Character, stageNum)
         end
     end)
 
-    local helper = nil
     pcall(function()
-        helper = require(ReplicatedStorage.Config.TrainArea.Helper)
+        local touched = Workspace:FindFirstChild("TOUCHED")
+        local startDoor = touched and touched:FindFirstChild("StartDoor")
+        local _, hrp = getHRPPosition()
+        if startDoor and hrp and firetouchinterest then
+            firetouchinterest(hrp, startDoor, 0)
+            task.wait(0.05)
+            firetouchinterest(hrp, startDoor, 1)
+        end
     end)
+
+    pcall(function()
+        local wm = Workspace:FindFirstChild("WorldModel")
+        local sm = wm and wm:FindFirstChild("StageMap")
+        local ap = sm and sm:FindFirstChild("AreaPart")
+        local targetArea = ap and (ap:FindFirstChild(tostring(stageNum)) or ap:FindFirstChild("Stage_" .. tostring(stageNum)))
+        if targetArea and (targetArea.ClassName == "Part" or targetArea.ClassName == "MeshPart") then
+            targetPos = targetArea.Position
+        end
+    end)
+
+    return teleportTo(targetPos)
+end
+
+local function getBestTrainArea()
+    local eco = lp:FindFirstChild("Eco")
+    local rebirths = (eco and eco:FindFirstChild("rebirth") and eco.rebirth.Value) or 0
 
     for _, area in ipairs(AUTO_TRAIN_AREAS) do
         local need = area.needRebirth
-        if helper and helper.GetNeedRebirth then
-            pcall(function()
-                need = helper.GetNeedRebirth(area.id) or need
-            end)
+        if area.id == 8 then
+            need = 20
         end
         if rebirths >= need then
             local livePos = area.pos
@@ -320,16 +355,137 @@ local function getBestTrainArea()
 end
 
 local function killStageEnemies()
-    local enemyFolder = Workspace:FindFirstChild("EnemyFolder")
-    if not enemyFolder then return 0 end
+    local remotes = ReplicatedStorage:FindFirstChild("Remote")
+    local attackFolder = remotes and remotes:FindFirstChild("Attack")
+    local enemyHitBE = attackFolder and attackFolder:FindFirstChild("EnemyHitBE")
+    local attackEnemyBE = attackFolder and attackFolder:FindFirstChild("AttackEnemyBE")
+    local dummyHitBE = attackFolder and attackFolder:FindFirstChild("DummyHitBE")
+    local atkOnceBE = attackFolder and attackFolder:FindFirstChild("ATKOnceBE")
+
+    local EnemyCTRL = nil
+    pcall(function()
+        local ctrl = ReplicatedStorage:FindFirstChild("CTRL")
+        if ctrl and ctrl:FindFirstChild("EnemyCTRL") then
+            EnemyCTRL = require(ctrl.EnemyCTRL)
+        end
+    end)
+
+    local HPCTRL = nil
+    pcall(function()
+        local ctrl = ReplicatedStorage:FindFirstChild("CTRL")
+        if ctrl and ctrl:FindFirstChild("HPCTRL") then
+            HPCTRL = require(ctrl.HPCTRL)
+        end
+    end)
+
+    local StageUtils = nil
+    pcall(function()
+        local mgr = lp:FindFirstChild("PlayerScripts") and lp.PlayerScripts:FindFirstChild("Manager")
+        local sm = mgr and mgr:FindFirstChild("StageManager")
+        if sm and sm:FindFirstChild("StageUtils") then
+            StageUtils = require(sm.StageUtils)
+        end
+    end)
+
     local count = 0
-    for _, enemy in ipairs(enemyFolder:GetChildren()) do
-        local hp = enemy:FindFirstChild("HPValue")
-        if hp and hp.Value > 0 then
-            hp.Value = 0
-            count = count + 1
+
+    local enemyFolder = Workspace:FindFirstChild("EnemyFolder")
+    if enemyFolder then
+        local enemyNames = {}
+        for _, enemy in ipairs(enemyFolder:GetChildren()) do
+            local hp = enemy:FindFirstChild("HPValue") or enemy:FindFirstChild("HPValue", true)
+            local isDead = enemy:GetAttribute("Dead")
+            if (hp and hp.Value > 0) or (not isDead) then
+                table.insert(enemyNames, enemy.Name)
+                count = count + 1
+
+                if enemyHitBE then
+                    pcall(function()
+                        enemyHitBE:Fire(enemy.Name, 999999999999, {
+                            SkillID = "Player_ATK_1",
+                            Damage = 999999999999,
+                            IsCrit = true
+                        })
+                    end)
+                end
+
+                if StageUtils and StageUtils.HurtEnemy then
+                    pcall(function()
+                        StageUtils.HurtEnemy(enemy.Name, 999999999999, { Damage = 999999999999 })
+                    end)
+                end
+
+                if EnemyCTRL and EnemyCTRL.HurtEnemy then
+                    pcall(function()
+                        EnemyCTRL.HurtEnemy(enemy.Name, 999999999999, { Damage = 999999999999 })
+                    end)
+                end
+                if EnemyCTRL and EnemyCTRL.DeadEnemyData then
+                    pcall(function()
+                        EnemyCTRL.DeadEnemyData(enemy.Name)
+                    end)
+                end
+
+                if HPCTRL and HPCTRL.DamageOnce then
+                    pcall(function()
+                        HPCTRL.DamageOnce(enemy, 999999999999)
+                    end)
+                end
+                if HPCTRL and HPCTRL.SetCurrentHP then
+                    pcall(function()
+                        HPCTRL.SetCurrentHP(enemy, 0)
+                    end)
+                end
+
+                pcall(function()
+                    if hp then hp.Value = 0 end
+                    local hum = enemy:FindFirstChild("Humanoid")
+                    if hum then hum.Health = 0 end
+                    enemy:SetAttribute("Dead", true)
+                end)
+            end
+        end
+
+        if #enemyNames > 0 and attackEnemyBE then
+            pcall(function()
+                attackEnemyBE:Fire(enemyNames, {
+                    Attacker = lp,
+                    SkillID = "Player_ATK_1"
+                })
+            end)
         end
     end
+
+    local canAttackFolder = Workspace:FindFirstChild("CanAttackFolder")
+    if canAttackFolder then
+        for _, obj in ipairs(canAttackFolder:GetChildren()) do
+            local hp = obj:FindFirstChild("HPValue") or obj:FindFirstChild("HPValue", true)
+            if hp and hp.Value > 0 then
+                count = count + 1
+                if dummyHitBE then
+                    pcall(function()
+                        dummyHitBE:Fire(obj, 999999999999, {
+                            SkillID = "Player_ATK_1",
+                            Damage = 999999999999
+                        })
+                    end)
+                end
+                if HPCTRL and HPCTRL.DamageOnce then
+                    pcall(function()
+                        HPCTRL.DamageOnce(obj, 999999999999)
+                    end)
+                end
+                pcall(function()
+                    hp.Value = 0
+                end)
+            end
+        end
+    end
+
+    if count > 0 and atkOnceBE then
+        pcall(function() atkOnceBE:Fire() end)
+    end
+
     return count
 end
 
@@ -542,7 +698,7 @@ local Window = Non:CreateWindow({
 
 Window:SetToggleKey("h")
 
-local autoFarmToggle, autoCollectToggle, godModeToggle, barrierToggle
+local autoFarmToggle, instaKillToggle, autoCollectToggle, godModeToggle, barrierToggle
 
 local LoopSection = Window:Section({ Title = "AutoFarm" })
 local LoopTab = LoopSection:Tab({ Title = "Zone 27", Icon = "crosshair" })
@@ -555,6 +711,7 @@ local zone27LoopToggle = LoopTab:Toggle({
         if on then
             STATE.GodMode = true
             STATE.AutoFarm = true
+            STATE.InstaKill = true
             STATE.AutoCollectOres = true
             STATE.BypassBarriers = true
             if autoFarmToggle and autoFarmToggle.Set then pcall(function() autoFarmToggle:Set(true) end) end
@@ -563,7 +720,7 @@ local zone27LoopToggle = LoopTab:Toggle({
             if barrierToggle and barrierToggle.Set then pcall(function() barrierToggle:Set(true) end) end
             applyGodMode()
             applyBarrierBypass()
-            say("AutoFarm Zone 27", "", "zap")
+            say("AutoFarm Zone 27", "Enabled! Axis spin & full collection active", "zap")
         else
             say("AutoFarm Zone 27", "Disabled", "circlex")
         end
@@ -572,18 +729,28 @@ local zone27LoopToggle = LoopTab:Toggle({
 
 local MainSection = Window:Section({ Title = "Features" })
 
-local FarmTab = MainSection:Tab({ Title = "Combat", Icon = "crosshair" })
+local CombatTab = MainSection:Tab({ Title = "Combat", Icon = "crosshair" })
 
-autoFarmToggle = FarmTab:Toggle({
+instaKillToggle = CombatTab:Toggle({
     Title = "Insta-kill",
     Default = false,
     Callback = function(on)
         STATE.InstaKill = on
-        say("InstaKill", on and "Enabled" or "Disabled", on and "circlecheck" or "circlex")
+        STATE.AutoFarm = on
+        if on then
+            task.spawn(function()
+                while STATE.Running and (STATE.InstaKill or STATE.AutoFarm) do
+                    killStageEnemies()
+                    task.wait(0.1)
+                end
+            end)
+        end
+        say("Insta-kill", on and "Enabled" or "Disabled", on and "circlecheck" or "circlex")
     end
 })
+autoFarmToggle = instaKillToggle
 
-autoCollectToggle = FarmTab:Toggle({
+autoCollectToggle = CombatTab:Toggle({
     Title = "Auto Collect Ores",
     Default = false,
     Callback = function(on)
@@ -640,24 +807,6 @@ ZonesTab:Button({
     end
 })
 
-ZonesTab:Divider()
-
-local allZonesGroup = ZonesTab:Group({
-    Title = "All Zones (1-27)",
-    Closed = false
-})
-
-for i = 1, 27 do
-    allZonesGroup:Button({
-        Title = "Zone " .. i,
-        Size = "Small",
-        Icon = "map",
-        Callback = function()
-            teleportToStage(i)
-        end
-    })
-end
-
 local PlayerTab = MainSection:Tab({ Title = "Player", Icon = "shield" })
 
 godModeToggle = PlayerTab:Toggle({
@@ -676,19 +825,27 @@ barrierToggle = PlayerTab:Toggle({
     Callback = function(on)
         STATE.BypassBarriers = on
         applyBarrierBypass()
-        say("Barriers", on and "Bypassed" or "Normal Collision", "slidershorizontal")
+        say("Barriers", on and "Bypassed" or "Restored", on and "shield" or "eyeoff")
     end
 })
 
-local SettingsSection = Window:Section({ Title = "Settings" })
-local SettingsTab = SettingsSection:Tab({ Title = "Settings", Icon = "palette" })
+PlayerTab:Button({
+    Title = "Teleport to Spawn",
+    Icon = "home",
+    Callback = function()
+        teleportToSpawn()
+        say("Teleport", "Teleported to Spawn", "home")
+    end
+})
+
+local SettingsTab = MainSection:Tab({ Title = "Settings", Icon = "settings" })
 
 SettingsTab:Dropdown({
     Title = "Theme",
     Values = Non:GetThemes(),
     Default = "Emerald",
-    Callback = function(name)
-        Non:SetTheme(name)
+    Callback = function(theme)
+        Non:SetTheme(theme)
     end
 })
 
@@ -796,30 +953,29 @@ task.spawn(function()
                 say("AutoFarm Zone 27", "All ores collected! TP to Zone 1...", "fastforward")
                 teleportToStage(1)
                 say("AutoFarm Zone 27", "Waiting in Zone 1 to load chunks & loot...", "clock")
-                task.wait(2.0)
+                task.wait(1.2)
 
-                if STATE.Running and STATE.Zone27Loop then
-                    say("AutoFarm Zone 27", "Approaching Start Door...", "home")
-                    local doorEntrance = Vector3.new(3.24, 4.0, -68.0)
-                    tweenToPosition(doorEntrance, 1.3, true)
+                local doorPos = getStartDoorPosition()
+                local preDoorPos = Vector3.new(doorPos.X, doorPos.Y, doorPos.Z - 20)
+                say("AutoFarm Zone 27", "Approaching Start Door...", "home")
+                tweenToPosition(preDoorPos, 1.8, true)
+                task.wait(0.2)
 
-                    say("AutoFarm Zone 27", "Walking through Start Door into Lobby...", "navigation")
-                    local doorPast = Vector3.new(3.24, 4.0, -48.0)
-                    tweenToPosition(doorPast, 1.2, true)
+                local lobbyPos = Vector3.new(doorPos.X, doorPos.Y, doorPos.Z + 16)
+                say("AutoFarm Zone 27", "Walking through Start Door into Lobby...", "navigation")
+                tweenToPosition(lobbyPos, 1.8, true)
+                triggerDoorTouch()
 
-                    say("AutoFarm Zone 27", "Receiving materials in lobby...", "clock")
-                    task.wait(2.2)
+                say("AutoFarm Zone 27", "Receiving materials in lobby...", "clock")
+                task.wait(1.8)
 
-                    if STATE.Running and STATE.Zone27Loop then
-                        say("AutoFarm Zone 27", "Materials received! Arrived at Spawn", "circlecheck")
-                        tweenToSpawn(1.2, true)
-                        task.wait(2.2)
-                    end
-                end
+                teleportToSpawn()
+                task.wait(0.4)
+                say("AutoFarm Zone 27", "Materials received! Arrived at Spawn", "circlecheck")
+                task.wait(0.8)
             end
-        else
-            task.wait(0.4)
         end
+        task.wait(0.2)
     end
 end)
 
@@ -827,21 +983,21 @@ task.spawn(function()
     local lastMachineId = nil
 
     while STATE.Running do
-        task.wait(0.35)
+        task.wait(0.3)
+
         if STATE.AutoRebirth then
             pcall(function()
-                local bestArea, areaPos, currentRebirths = getBestTrainArea()
+                local bestArea, livePos, rebirths = getBestTrainArea()
                 local trainFolder = remotes and remotes:FindFirstChild("Train")
-                local rebirthFolder = remotes and remotes:FindFirstChild("Rebirth")
-
                 local intoRE = trainFolder and trainFolder:FindFirstChild("IntoAutoTrainRE")
-                local trainRE = trainFolder and trainFolder:FindFirstChild("TrainOnceRE")
-                local rebirthRE = rebirthFolder and rebirthFolder:FindFirstChild("TryRebirthRE")
+                local trainRE = trainFolder and trainFolder:FindFirstChild("AutoTrainRE")
+                local rebirthFolder = remotes and remotes:FindFirstChild("Rebirth")
+                local rebirthRE = rebirthFolder and rebirthFolder:FindFirstChild("RebirthRE")
 
-                if bestArea and bestArea.id ~= lastMachineId then
+                if lastMachineId ~= bestArea.id then
                     lastMachineId = bestArea.id
-                    teleportTo(areaPos)
-                    task.wait(0.2)
+                    teleportTo(livePos)
+                    task.wait(0.3)
                     if intoRE then
                         intoRE:FireServer(bestArea.id)
                     end
@@ -885,17 +1041,19 @@ task.spawn(function()
         end
         applyBarrierBypass()
 
-        if STATE.AutoFarm or STATE.Zone27Loop then
+        if STATE.AutoFarm or STATE.Zone27Loop or STATE.InstaKill then
             killStageEnemies()
         end
 
-        task.wait(0.2)
+        task.wait((STATE.AutoFarm or STATE.InstaKill) and 0.1 or 0.2)
     end
 end)
 
 _G.MatchaLootForgeHubCleanup = function()
     STATE.Running = false
     STATE.Zone27Loop = false
+    STATE.AutoFarm = false
+    STATE.InstaKill = false
     STATE.AutoCollectOres = false
     if keyrelease then
         pcall(function() keyrelease(0x45) end)
