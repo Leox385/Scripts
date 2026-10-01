@@ -2,30 +2,15 @@ if _G.MatchaLootForgeHubCleanup then
     pcall(_G.MatchaLootForgeHubCleanup)
 end
 
-pcall(function()
-    if not game:IsLoaded() then
-        game.Loaded:Wait()
-    end
-end)
-
 local Non = loadstring(game:HttpGet("https://raw.githubusercontent.com/neaxusxgod-png/NonUI/main/NonUI.lua"))() or NonUI
 
 local Players = game:GetService("Players")
-while not Players do
-    task.wait(0.1)
-    Players = game:GetService("Players")
-end
-
-local Workspace = game:GetService("Workspace") or workspace
+local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
 local RunService = game:GetService("RunService")
 
 local lp = Players.LocalPlayer
-while not lp do
-    task.wait(0.1)
-    lp = Players.LocalPlayer
-end
 local remotes = ReplicatedStorage:FindFirstChild("Remote")
 
 local STATE = {
@@ -253,66 +238,100 @@ local function tweenToPosition(targetPos, duration, isLoop)
     pcall(function()
         hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
         hrp.Velocity = Vector3.new(0, 0, 0)
+        hrp.CFrame = CFrame.new(targetPos.X, endGroundY, targetPos.Z)
     end)
 
     return true
 end
 
-local function tweenToSpawn(duration, isLoop)
-    local targetPos = getSpawnPosition()
-    return tweenToPosition(targetPos, duration or 1.5, isLoop)
+local function getLiveDoorPart()
+    local touched = Workspace:FindFirstChild("TOUCHED")
+    local startDoor = touched and touched:FindFirstChild("StartDoor")
+    if startDoor then
+        if startDoor.ClassName == "Part" or startDoor.ClassName == "MeshPart" then
+            return startDoor
+        end
+        local p = startDoor:FindFirstChildWhichIsA("BasePart") or startDoor:FindFirstChild("TouchInterest", true)
+        if p and p.Parent and (p.Parent.ClassName == "Part" or p.Parent.ClassName == "MeshPart") then
+            return p.Parent
+        end
+    end
+    local wm = Workspace:FindFirstChild("WorldModel")
+    local sm = wm and wm:FindFirstChild("StageMap")
+    local boards = sm and sm:FindFirstChild("Boards")
+    local st1 = boards and boards:FindFirstChild("Stage_1")
+    if st1 and (st1.ClassName == "Part" or st1.ClassName == "MeshPart") then
+        return st1
+    end
+    return nil
 end
 
-local function getStagePosition(stageNum)
-    local targetPos = nil
-    pcall(function()
-        local sm = Workspace:FindFirstChild("WorldModel") and Workspace.WorldModel:FindFirstChild("StageMap")
-        local ep = sm and sm:FindFirstChild("EnemyPoint")
-        local stageModel = ep and ep:FindFirstChild("Stage_" .. stageNum)
-        if stageModel then
-            for _, child in ipairs(stageModel:GetChildren()) do
-                if child.ClassName == "Part" or child.ClassName == "MeshPart" then
-                    targetPos = child.Position
-                    break
-                end
-            end
+local function getStartDoorPosition()
+    local doorPart = getLiveDoorPart()
+    if doorPart then
+        local s, pPos = pcall(function() return doorPart.Position end)
+        if s and typeof(pPos) == "Vector3" then
+            return pPos
         end
-    end)
-    if not targetPos then
-        targetPos = STAGE_COORDS[stageNum]
     end
-    return targetPos
+    return Vector3.new(-3.4, 4.0, -10.0)
+end
+
+local function triggerDoorTouch()
+    local doorPart = getLiveDoorPart()
+    local _, hrp = getHRPPosition()
+    if doorPart and hrp and firetouchinterest then
+        pcall(function()
+            firetouchinterest(hrp, doorPart, 0)
+            task.wait(0.05)
+            firetouchinterest(hrp, doorPart, 1)
+        end)
+    end
 end
 
 local function teleportToStage(stageNum)
-    local pos = getStagePosition(stageNum)
-    if pos and teleportTo(pos) then
-        say("Teleport", "Teleported to Zone " .. stageNum, "circlecheck")
-    else
-        say("Teleport", "Failed to teleport to Zone " .. stageNum, "circlex")
-    end
-end
+    local targetPos = STAGE_COORDS[stageNum]
+    if not targetPos then return false end
 
-local function getBestTrainArea()
-    local rebirths = 0
     pcall(function()
-        local eco = lp:FindFirstChild("Eco")
-        if eco and eco:FindFirstChild("rebirth") then
-            rebirths = tonumber(eco.rebirth.Value) or 0
+        local tu = require(ReplicatedStorage.Utils.TranslateUtils)
+        if tu and tu.ToStage and lp.Character then
+            tu.ToStage(lp.Character, stageNum)
         end
     end)
 
-    local helper = nil
     pcall(function()
-        helper = require(ReplicatedStorage.Config.TrainArea.Helper)
+        local touched = Workspace:FindFirstChild("TOUCHED")
+        local startDoor = touched and touched:FindFirstChild("StartDoor")
+        local _, hrp = getHRPPosition()
+        if startDoor and hrp and firetouchinterest then
+            firetouchinterest(hrp, startDoor, 0)
+            task.wait(0.05)
+            firetouchinterest(hrp, startDoor, 1)
+        end
     end)
+
+    pcall(function()
+        local wm = Workspace:FindFirstChild("WorldModel")
+        local sm = wm and wm:FindFirstChild("StageMap")
+        local ap = sm and sm:FindFirstChild("AreaPart")
+        local targetArea = ap and (ap:FindFirstChild(tostring(stageNum)) or ap:FindFirstChild("Stage_" .. tostring(stageNum)))
+        if targetArea and (targetArea.ClassName == "Part" or targetArea.ClassName == "MeshPart") then
+            targetPos = targetArea.Position
+        end
+    end)
+
+    return teleportTo(targetPos)
+end
+
+local function getBestTrainArea()
+    local eco = lp:FindFirstChild("Eco")
+    local rebirths = (eco and eco:FindFirstChild("rebirth") and eco.rebirth.Value) or 0
 
     for _, area in ipairs(AUTO_TRAIN_AREAS) do
         local need = area.needRebirth
-        if helper and helper.GetNeedRebirth then
-            pcall(function()
-                need = helper.GetNeedRebirth(area.id) or need
-            end)
+        if area.id == 8 then
+            need = 20
         end
         if rebirths >= need then
             local livePos = area.pos
@@ -681,8 +700,8 @@ Window:SetToggleKey("h")
 
 local autoFarmToggle, instaKillToggle, autoCollectToggle, godModeToggle, barrierToggle
 
-local LoopSection = Window:Section({ Title = "AutoFarm Zone 27" })
-local LoopTab = LoopSection:Tab({ Title = "AutoFarm Zone 27", Icon = "repeat" })
+local LoopSection = Window:Section({ Title = "AutoFarm" })
+local LoopTab = LoopSection:Tab({ Title = "Zone 27", Icon = "crosshair" })
 
 local zone27LoopToggle = LoopTab:Toggle({
     Title = "AutoFarm Zone 27",
@@ -806,19 +825,27 @@ barrierToggle = PlayerTab:Toggle({
     Callback = function(on)
         STATE.BypassBarriers = on
         applyBarrierBypass()
-        say("Barriers", on and "Bypassed" or "Normal Collision", "slidershorizontal")
+        say("Barriers", on and "Bypassed" or "Restored", on and "shield" or "eyeoff")
     end
 })
 
-local SettingsSection = Window:Section({ Title = "Settings" })
-local SettingsTab = SettingsSection:Tab({ Title = "Settings", Icon = "palette" })
+PlayerTab:Button({
+    Title = "Teleport to Spawn",
+    Icon = "home",
+    Callback = function()
+        teleportToSpawn()
+        say("Teleport", "Teleported to Spawn", "home")
+    end
+})
+
+local SettingsTab = MainSection:Tab({ Title = "Settings", Icon = "settings" })
 
 SettingsTab:Dropdown({
     Title = "Theme",
     Values = Non:GetThemes(),
     Default = "Emerald",
-    Callback = function(name)
-        Non:SetTheme(name)
+    Callback = function(theme)
+        Non:SetTheme(theme)
     end
 })
 
@@ -926,30 +953,29 @@ task.spawn(function()
                 say("AutoFarm Zone 27", "All ores collected! TP to Zone 1...", "fastforward")
                 teleportToStage(1)
                 say("AutoFarm Zone 27", "Waiting in Zone 1 to load chunks & loot...", "clock")
-                task.wait(2.0)
+                task.wait(1.2)
 
-                if STATE.Running and STATE.Zone27Loop then
-                    say("AutoFarm Zone 27", "Approaching Start Door...", "home")
-                    local doorEntrance = Vector3.new(3.24, 4.0, -68.0)
-                    tweenToPosition(doorEntrance, 1.3, true)
+                local doorPos = getStartDoorPosition()
+                local preDoorPos = Vector3.new(doorPos.X, doorPos.Y, doorPos.Z - 20)
+                say("AutoFarm Zone 27", "Approaching Start Door...", "home")
+                tweenToPosition(preDoorPos, 1.8, true)
+                task.wait(0.2)
 
-                    say("AutoFarm Zone 27", "Walking through Start Door into Lobby...", "navigation")
-                    local doorPast = Vector3.new(3.24, 4.0, -48.0)
-                    tweenToPosition(doorPast, 1.2, true)
+                local lobbyPos = Vector3.new(doorPos.X, doorPos.Y, doorPos.Z + 16)
+                say("AutoFarm Zone 27", "Walking through Start Door into Lobby...", "navigation")
+                tweenToPosition(lobbyPos, 1.8, true)
+                triggerDoorTouch()
 
-                    say("AutoFarm Zone 27", "Receiving materials in lobby...", "clock")
-                    task.wait(2.2)
+                say("AutoFarm Zone 27", "Receiving materials in lobby...", "clock")
+                task.wait(1.8)
 
-                    if STATE.Running and STATE.Zone27Loop then
-                        say("AutoFarm Zone 27", "Materials received! Arrived at Spawn", "circlecheck")
-                        tweenToSpawn(1.2, true)
-                        task.wait(2.2)
-                    end
-                end
+                teleportToSpawn()
+                task.wait(0.4)
+                say("AutoFarm Zone 27", "Materials received! Arrived at Spawn", "circlecheck")
+                task.wait(0.8)
             end
-        else
-            task.wait(0.4)
         end
+        task.wait(0.2)
     end
 end)
 
@@ -957,21 +983,21 @@ task.spawn(function()
     local lastMachineId = nil
 
     while STATE.Running do
-        task.wait(0.35)
+        task.wait(0.3)
+
         if STATE.AutoRebirth then
             pcall(function()
-                local bestArea, areaPos, currentRebirths = getBestTrainArea()
+                local bestArea, livePos, rebirths = getBestTrainArea()
                 local trainFolder = remotes and remotes:FindFirstChild("Train")
-                local rebirthFolder = remotes and remotes:FindFirstChild("Rebirth")
-
                 local intoRE = trainFolder and trainFolder:FindFirstChild("IntoAutoTrainRE")
-                local trainRE = trainFolder and trainFolder:FindFirstChild("TrainOnceRE")
-                local rebirthRE = rebirthFolder and rebirthFolder:FindFirstChild("TryRebirthRE")
+                local trainRE = trainFolder and trainFolder:FindFirstChild("AutoTrainRE")
+                local rebirthFolder = remotes and remotes:FindFirstChild("Rebirth")
+                local rebirthRE = rebirthFolder and rebirthFolder:FindFirstChild("RebirthRE")
 
-                if bestArea and bestArea.id ~= lastMachineId then
+                if lastMachineId ~= bestArea.id then
                     lastMachineId = bestArea.id
-                    teleportTo(areaPos)
-                    task.wait(0.2)
+                    teleportTo(livePos)
+                    task.wait(0.3)
                     if intoRE then
                         intoRE:FireServer(bestArea.id)
                     end
