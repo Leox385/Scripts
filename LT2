@@ -26,6 +26,7 @@ assert(Non, "Failed to load NonUI library.")
 local selectedTreeType = "All (Nearest)"
 local bringFilterMode = "My Logs Only"
 local autoMagnetActive = false
+local autoSawmaxActive = false
 local customWalkSpeed = 16
 local selectedWaypoint = "Wood R Us (Shop)"
 local isManualChopping = false
@@ -361,17 +362,20 @@ end
 
 local function isSpecialTree(p, r, g, b, val)
     if val ~= "" and val ~= "oak" and val ~= "generic" then return true end
-    if (p.Y > 300 and p.Z > 2500) or (r > 210 and g > 210 and b > 210) then return true end -- Frost
-    if (p.Y >= -30 and p.Y <= 30 and p.X >= -1350 and p.X <= -950 and p.Z >= -1250 and p.Z <= -700) or (r > 210 and g > 150 and b < 100) then return true end -- SnowGlow
-    if (p.Y > 500 and p.X < -1300) or (r > 170 and g < 70 and b < 60) then return true end -- Volcano
-    if (p.Y >= -140 and p.Y <= -35 and p.Z > 500) or (b > 80 and b > r + 30) then return true end -- CaveCrawler (Neon Blue)
-    if (p.Y < -150) or (p.Y < -50 and p.Z < -1500) or (r < 50 and g < 50 and b < 50) then return true end -- Phantom (End Times)
-    if (p.Z > 600 and p.Z < 1600 and p.X > 0 and p.X < 700 and r > 90 and r < 130 and g < 80) then return true end -- Cherry
-    if (p.Y >= 115 and p.Y <= 170 and p.X >= -1500 and p.X <= -750 and p.Z >= -1550 and p.Z <= -450) then return true end -- Swamp (Gold/Green)
-    if (p.Y < 25 and (p.X > 1700 or p.Z < -1300) and r > 185 and g > 175) then return true end -- Palm
-    if (p.X > 4200 and p.Z > -1000 and p.Z < 600 and r > 160 and r < 190) then return true end -- Koa
-    if (p.Z < -1000 and p.X > -600 and p.X < 900 and r > 140 and r < 180 and g > 80 and g < 115) then return true end -- Walnut
-    if (r > 240 and g > 240 and b > 180) then return true end -- Birch
+    -- Elm detection: Sand-red / tan interior or Safari biome
+    if (r >= 138 and r <= 158 and g >= 110 and g <= 130 and b >= 108 and b <= 128) then return true end
+    if (p.Z < -1000 and p.Z > -2500 and p.X > 150 and p.X < 600) and (r > 135 and r < 160) then return true end
+    if (p.Y > 300 and p.Z > 2500) or (r > 210 and g > 210 and b > 210) then return true end
+    if (p.Y >= -30 and p.Y <= 30 and p.X >= -1350 and p.X <= -950 and p.Z >= -1250 and p.Z <= -700) or (r > 210 and g > 150 and b < 100) then return true end
+    if (p.Y > 500 and p.X < -1300) or (r > 170 and g < 70 and b < 60) then return true end
+    if (p.Y >= -140 and p.Y <= -35 and p.Z > 500) or (b > 80 and b > r + 30) then return true end
+    if (p.Y < -150) or (p.Y < -50 and p.Z < -1500) or (r < 50 and g < 50 and b < 50) then return true end
+    if (p.Z > 600 and p.Z < 1600 and p.X > 0 and p.X < 700 and r > 90 and r < 130 and g < 80) then return true end
+    if (p.Y >= 115 and p.Y <= 170 and p.X >= -1500 and p.X <= -750 and p.Z >= -1550 and p.Z <= -450) then return true end
+    if (p.Y < 25 and (p.X > 1700 or p.Z < -1300) and r > 185 and g > 175) then return true end
+    if (p.X > 4200 and p.Z > -1000 and p.Z < 600 and r > 160 and r < 190) then return true end
+    if (p.Z < -1000 and p.X > -600 and p.X < 900 and r > 140 and r < 180 and g > 80 and g < 115) then return true end
+    if (r > 240 and g > 240 and b > 180) then return true end
     return false
 end
 
@@ -382,6 +386,41 @@ local function matchesTreeClass(tree, targetType)
     local tc = tree:FindFirstChild("TreeClass")
     local val = (tc and tc.Value or ""):lower()
     local target = (targetType or ""):lower()
+
+    local ws = tree:FindFirstChild("WoodSection")
+    if not ws or not ws:IsA("BasePart") then return false end
+
+    local p = ws.Position
+    local col = ws.Color
+    local r = col and ((col.R > 1) and col.R or (col.R * 255)) or 0
+    local g = col and ((col.G > 1) and col.G or (col.G * 255)) or 0
+    local b = col and ((col.B > 1) and col.B or (col.B * 255)) or 0
+
+    if target:find("elm") then
+        if val:find("elm") ~= nil then return true end
+        if val ~= "fir" and val ~= "pine" and val ~= "generic" then
+            if r >= 138 and r <= 158 and g >= 110 and g <= 130 and b >= 108 and b <= 128 then
+                if not (p.Z > 1000 and p.Z < 2600 and p.X > 200 and p.X < 1600 and p.Y > 50) then
+                    return true
+                end
+            end
+            if (p.Z < -1000 and p.Z > -2500 and p.X > 150 and p.X < 600) and (r > 135 and r < 160) then
+                return true
+            end
+        end
+        return false
+    elseif target:find("oak") or target:find("generic") then
+        if val == "generic" then return true end
+        if val == "oak" then
+            if (r >= 138 and r <= 158 and g >= 110 and g <= 130 and b >= 108 and b <= 128) then return false end
+            if (p.Z < -1000 and p.Z > -2500 and p.X > 150 and p.X < 600) then return false end
+            return true
+        end
+        if r >= 115 and r <= 132 and g >= 85 and g <= 100 and b >= 62 and b <= 78 then
+            return true
+        end
+        return not isSpecialTree(p, r, g, b, val)
+    end
 
     if val ~= "" then
         if target:find("frost") then
@@ -395,11 +434,9 @@ local function matchesTreeClass(tree, targetType)
         elseif target:find("greenswampy") then
             return val:find("greenswamp") ~= nil or (val:find("swamp") ~= nil and not val:find("gold"))
         elseif target:find("cavecrawler") or target:find("neon blue") then
-            -- CaveCrawler: Neon Blue tree in cave maze. EXCLUDE End Times / Phantom trees!
             if val:find("end") or val:find("phantom") or val:find("lone") then return false end
             return val:find("cavecrawler") ~= nil or val:find("crawler") ~= nil or (val:find("cave") ~= nil and not val:find("lone"))
         elseif target:find("phantom") or target:find("end") then
-            -- Phantom / End Times: The dark tree in the End Times across the bridge!
             return val:find("phantom") ~= nil or val:find("endtimes") ~= nil or val:find("end") ~= nil or val:find("lone") ~= nil
         elseif target:find("spooky") then
             return val:find("spook") ~= nil
@@ -409,8 +446,6 @@ local function matchesTreeClass(tree, targetType)
             return val:find("zombie") ~= nil
         elseif target:find("bluespruce") then
             return val:find("spruce") ~= nil or val:find("bspruce") ~= nil
-        elseif target:find("elm") then
-            return val:find("elm") ~= nil
         elseif target:find("birch") then
             return val:find("birch") ~= nil
         elseif target:find("cherry") then
@@ -425,20 +460,10 @@ local function matchesTreeClass(tree, targetType)
             return val:find("fir") ~= nil
         elseif target:find("pine") then
             return val:find("pine") ~= nil
-        elseif target:find("oak") then
-            return val == "oak" or val == "generic"
-        elseif target:find("generic") then
-            return val == "generic" or val == "oak"
         else
             return val == target or val:find(target, 1, true) ~= nil
         end
     end
-
-    local ws = tree:FindFirstChild("WoodSection")
-    if not ws or not ws:IsA("BasePart") then return false end
-
-    local p = ws.Position
-    local r, g, b = ws.Color.R, ws.Color.G, ws.Color.B
 
     if target:find("frost") then
         return (p.Y > 300 and p.Z > 2500) and (r > 210 and g > 210 and b > 210)
@@ -447,10 +472,8 @@ local function matchesTreeClass(tree, targetType)
     elseif target:find("volcano") then
         return (p.Y > 500 and p.X < -1300) or (r > 170 and g < 70 and b < 60)
     elseif target:find("cavecrawler") or target:find("neon blue") then
-        -- CaveCrawler: Neon Blue tree. Blue > Red & Green, in cave maze (Y between -140 and -35, Z > 500)
         return (p.Y >= -140 and p.Y <= -35 and p.Z > 500) or (b > 80 and b > r + 30 and b > g + 20)
     elseif target:find("phantom") or target:find("end") then
-        -- Phantom / End Times: End Times area across bridge (Y < -150 or Z < -1500)
         return (p.Y < -150) or (p.Y < -50 and p.Z < -1500) or (r < 50 and g < 50 and b < 50)
     elseif target:find("cherry") then
         return (p.Z > 600 and p.Z < 1600 and p.X > 0 and p.X < 700 and r > 90 and r < 130 and g < 80)
@@ -470,8 +493,6 @@ local function matchesTreeClass(tree, targetType)
         return (p.Z > 1000 and p.Z < 2600 and p.X > 200 and p.X < 1600)
     elseif target:find("pine") then
         return (p.Z > 1000 and p.Z < 2600 and p.X > 300 and p.X < 1600)
-    elseif target:find("oak") or target:find("generic") then
-        return not isSpecialTree(p, r, g, b, val)
     end
 
     return false
@@ -498,7 +519,7 @@ local function findTreeLowest(targetType, maxDist)
     local shortestDist = maxDist
 
     for _, region in ipairs(workspace:GetChildren()) do
-        if region.Name == "TreeRegion" then
+        if region.Name == "TreeRegion" or region.Name:find("TreeRegion") or region.Name:find("Tree") then
             for _, tree in ipairs(region:GetChildren()) do
                 if tree:FindFirstChild("CutEvent") and isUncutTree(tree) and matchesTreeClass(tree, targetType) then
                     local lowestSection = findLowestSection(tree)
@@ -557,6 +578,178 @@ local function strikeSectionLegit(tree, section, axe, treeClassName)
     return true, safeDelay
 end
 
+
+local function getMySawmax()
+    local pm = workspace:FindFirstChild("PlayerModels")
+    if not pm then return nil, nil end
+
+    for _, item in ipairs(pm:GetChildren()) do
+        if isPlayerOwnedItem(item) then
+            local iname = item:FindFirstChild("ItemName")
+            local inameStr = iname and tostring(iname.Value) or ""
+            local name = item.Name
+            if inameStr == "Sawmill4L" or name == "Sawmill4L" or inameStr:lower():find("sawmill4l") or inameStr:lower():find("sawmax") then
+                return item, "Sawmax 02L"
+            end
+        end
+    end
+
+    for _, item in ipairs(pm:GetChildren()) do
+        if isPlayerOwnedItem(item) then
+            local iname = item:FindFirstChild("ItemName")
+            local inameStr = iname and tostring(iname.Value) or ""
+            if inameStr:find("Sawmill4") or item.Name:find("Sawmill4") then
+                return item, "Sawmax 02"
+            end
+        end
+    end
+
+    for _, item in ipairs(pm:GetChildren()) do
+        if isPlayerOwnedItem(item) then
+            local iname = item:FindFirstChild("ItemName")
+            local inameStr = iname and tostring(iname.Value) or ""
+            local name = item.Name:lower()
+            if name:find("sawmill") or inameStr:lower():find("sawmill") or item:FindFirstChild("WoodSaw") or (item:FindFirstChild("Conveyor") and item:FindFirstChild("Particles")) then
+                return item, inameStr ~= "" and inameStr or item.Name
+            end
+        end
+    end
+
+    return nil, nil
+end
+
+local function feedLogToSawmill(log, sawmill)
+    local main = log:FindFirstChild("WoodSection") or log:FindFirstChild("Main")
+    if not main then
+        for _, p in ipairs(log:GetChildren()) do
+            if isRealBasePart(p) then
+                main = p
+                break
+            end
+        end
+    end
+    if not main then return false end
+
+    local _, root = getChar()
+    if not root then return false end
+
+    local sawMain = sawmill:FindFirstChild("Main")
+    local conv = sawmill:FindFirstChild("Conveyor")
+    local convPart = conv and (conv:FindFirstChild("Conveyor") or conv:FindFirstChildWhichIsA("BasePart"))
+    local particles = sawmill:FindFirstChild("Particles")
+
+    local dir = (convPart and convPart.Velocity.Magnitude > 0.1) and convPart.Velocity.Unit or (sawMain and sawMain.CFrame.RightVector or Vector3.new(1, 0, 0))
+    local convPos = convPart and convPart.Position or (sawMain and sawMain.Position or Vector3.new(0, 0, 0))
+    local convY = convPart and convPart.Position.Y or (sawMain and sawMain.Position.Y or 0)
+
+    local bladePos = particles and particles.Position or (convPos + dir * 1.3)
+    
+    local refinePos = Vector3.new(bladePos.X, convY + 0.85, bladePos.Z) - dir * 0.5
+    local targetCF = CFrame.lookAt(refinePos, refinePos + dir) * CFrame.Angles(0, 0, math.rad(-90))
+    local standPos = CFrame.new(bladePos.X, bladePos.Y + 3.5, bladePos.Z + 5.0)
+
+    safeTeleport(CFrame.new(main.Position.X, main.Position.Y + 3.5, main.Position.Z))
+    task.wait(0.12)
+    ClientIsDragging:FireServer(log)
+    task.wait(0.06)
+    ClientIsDragging:FireServer(log)
+    task.wait(0.06)
+
+    safeTeleport(standPos)
+    task.wait(0.06)
+
+    local delta = refinePos - main.Position
+    for _, p in ipairs(log:GetChildren()) do
+        if isRealBasePart(p) then
+            if p == main then
+                p.CFrame = targetCF
+            else
+                p.CFrame = p.CFrame + delta
+            end
+            p.Velocity = dir * 12
+            p.AssemblyLinearVelocity = dir * 12
+        end
+    end
+
+    ClientIsDragging:FireServer(log)
+    task.wait(0.08)
+    ClientIsDragging:FireServer(log)
+    task.wait(0.1)
+
+    return true
+end
+
+local function sendLogsToSawmax()
+    local saw, sawType = getMySawmax()
+    if not saw then
+        return Non:Notify({
+            Title = "No Sawmill",
+            Content = "Sawmax 02L not found on your plot. Place it down first.",
+            Icon = "alert-triangle",
+            Duration = 3
+        })
+    end
+
+    local lm = workspace:FindFirstChild("LogModels")
+    if not lm then return end
+
+    local _, root = getChar()
+    if not root then return end
+    local savedPos = root.CFrame
+    local logs = lm:GetChildren()
+    local count = 0
+
+    Non:Notify({
+        Title = sawType or "Sawmax 02L",
+        Content = string.format("Feeding logs directly into %s cutting blade...", sawType or "Sawmax 02L"),
+        Icon = "cog",
+        Duration = 2
+    })
+
+    task.spawn(function()
+        for _, log in ipairs(logs) do
+            local o = log:FindFirstChild("Owner")
+            local ownerStr = o and tostring(o.Value) or ""
+            local isEligible = false
+
+            if bringFilterMode == "All Players Logs" then
+                isEligible = true
+            elseif bringFilterMode == "My Logs Only" then
+                if isPlayerOwnedItem(log) then
+                    isEligible = true
+                end
+            else
+                if isPlayerOwnedItem(log) or not o or not o.Value or ownerStr:find("Unreadable") or ownerStr == "nil" or ownerStr == "" then
+                    isEligible = true
+                end
+            end
+
+            if isEligible then
+                local success = feedLogToSawmill(log, saw)
+                if success then
+                    count = count + 1
+                    task.wait(0.4)
+                end
+            end
+        end
+
+        safeTeleport(savedPos)
+        Non:Notify({
+            Title = "Refine Complete",
+            Content = string.format("Directly refined %d log(s) into %s.", count, sawType or "Sawmax 02L"),
+            Icon = "circle-check",
+            Duration = 4
+        })
+    end)
+end
+
+
+
+-- ========================================================================
+
+
+-- ========================================================================
+
 local function smartBringLog(log, savedPos)
     local main = log:FindFirstChild("WoodSection") or log:FindFirstChild("Main")
     if not main then
@@ -580,21 +773,17 @@ local function smartBringLog(log, savedPos)
             return true
         end
 
-        -- 1. Teleport player on top of the log to enter interaction range
         safeTeleport(CFrame.new(main.Position.X, main.Position.Y + 3.5, main.Position.Z))
         task.wait(0.12)
 
-        -- 2. Claim drag on the log twice to solidly claim network ownership
         ClientIsDragging:FireServer(log)
         task.wait(0.06)
         ClientIsDragging:FireServer(log)
         task.wait(0.06)
 
-        -- 3. Teleport player back to destination
         safeTeleport(savedPos)
         task.wait(0.06)
 
-        -- 4. Move all parts of the log to landing spot
         local delta = targetLanding - main.Position
         for _, p in ipairs(log:GetChildren()) do
             if isRealBasePart(p) then
@@ -604,13 +793,11 @@ local function smartBringLog(log, savedPos)
             end
         end
 
-        -- 5. Confirm drag at landing spot while player is standing right next to it
         ClientIsDragging:FireServer(log)
         task.wait(0.08)
         ClientIsDragging:FireServer(log)
         task.wait(0.1)
 
-        -- 6. Verify if it arrived successfully
         if (main.Position - savedPos.Position).Magnitude <= 18 then
             return true
         end
@@ -726,7 +913,6 @@ local function isEligibleLooseItem(item, filterType, ownershipMode)
         return false
     end
 
-    -- Never touch placed sawmills, conveyors, or built machines on plots
     if isPlacedStructure(item) then
         return false
     end
@@ -737,7 +923,6 @@ local function isEligibleLooseItem(item, filterType, ownershipMode)
     local o = item:FindFirstChild("Owner")
     local ownerStr = o and tostring(o.Value) or ""
 
-    -- Never touch store display/decorative items (Unreadable_name)
     if ownerStr:find("Unreadable") then
         return false
     end
@@ -759,14 +944,11 @@ local function isEligibleLooseItem(item, filterType, ownershipMode)
     if filterType == "Gifts & Presents" then
         return inameStr:lower():find("gift") ~= nil or inameStr:lower():find("present") ~= nil or item.Name:lower():find("gift") ~= nil or item.Name:lower():find("present") ~= nil
     elseif filterType == "Tools & Axes" then
-        -- Only loose unpacked tools/axes
         return isTool and not isBox
     elseif filterType == "Furniture & Boxes" then
-        -- Only boxed items (store boxes, boxed axes, boxed items) and loose furniture
-        -- NEVER loose axes, and NEVER refining machines / placed sawmills
         if isTool then return false end
         return isBox or isDraggable or (inameStr ~= "")
-    else -- "All Loose Items"
+    else
         return isBox or isTool or isDraggable or inameStr ~= ""
     end
 end
@@ -809,6 +991,106 @@ local function executeItemMagnet()
     end)
 end
 
+local function matchesPlankType(item, targetType)
+    if not item or not item.Parent then return false end
+    if not targetType or targetType == "All" then return true end
+
+    local target = targetType:lower()
+    local tc = item:FindFirstChild("TreeClass")
+    local tcStr = tc and tostring(tc.Value):lower() or ""
+
+    local main = item:FindFirstChild("WoodSection") or item:FindFirstChildWhichIsA("BasePart")
+    local col = main and main.Color
+    local r = col and ((col.R > 1) and col.R or (col.R * 255)) or 0
+    local g = col and ((col.G > 1) and col.G or (col.G * 255)) or 0
+    local b = col and ((col.B > 1) and col.B or (col.B * 255)) or 0
+
+    if target:find("elm") then
+        if tcStr:find("elm") then return true end
+        -- Color de tablon Elm en LT2: (234, 184, 146)
+        if r >= 220 and r <= 248 and g >= 170 and g <= 198 and b >= 135 and b <= 160 then
+            return true
+        end
+        return false
+    elseif target == "oak" or target == "generic" then
+        if tcStr == "oak" or tcStr == "generic" then
+            -- Excluir tablones Elm que a veces heredan TreeClass Oak pero tienen color (234, 184, 146)
+            if r >= 220 and r <= 248 and g >= 170 and g <= 198 and b >= 135 and b <= 160 then
+                return false
+            end
+            return true
+        end
+        -- Color de tablon Oak en LT2: (204, 142, 105)
+        if r >= 190 and r <= 218 and g >= 130 and g <= 155 and b >= 95 and b <= 120 then
+            return true
+        end
+        return false
+    elseif target:find("frost") then
+        if tcStr:find("frost") or tcStr:find("ice") then return true end
+        if r >= 140 and r <= 180 and g >= 225 and b >= 215 then return true end
+        return false
+    elseif target:find("snowglow") then
+        if tcStr:find("snowglow") or (tcStr:find("glow") and not tcStr:find("frost")) then return true end
+        if r >= 235 and g >= 235 and b <= 60 then return true end
+        return false
+    elseif target:find("volcano") or target:find("lava") then
+        if tcStr:find("volcano") or tcStr:find("lava") then return true end
+        if r >= 230 and g <= 40 and b <= 40 then return true end
+        return false
+    elseif target:find("cavecrawler") or target:find("neon blue") then
+        if tcStr:find("cave") or tcStr:find("crawler") then return true end
+        if b >= 180 and r <= 40 and g <= 70 then return true end
+        return false
+    elseif target:find("phantom") or target:find("end") then
+        if tcStr:find("phantom") or tcStr:find("end") or tcStr:find("lone") then return true end
+        if r <= 35 and g <= 35 and b <= 35 then return true end
+        return false
+    elseif target:find("goldswampy") or target:find("gold") then
+        if tcStr:find("gold") then return true end
+        if r >= 150 and r <= 190 and g >= 70 and g <= 110 and b <= 20 then return true end
+        return false
+    elseif target:find("greenswampy") or target:find("green") then
+        if tcStr:find("green") or (tcStr:find("swamp") and not tcStr:find("gold")) then return true end
+        if g >= 120 and g <= 165 and r <= 70 and b <= 85 then return true end
+        return false
+    elseif target:find("birch") then
+        if tcStr:find("birch") then return true end
+        if r >= 240 and g >= 240 and b >= 240 then return true end
+        return false
+    elseif target:find("walnut") then
+        if tcStr:find("walnut") then return true end
+        if r >= 210 and r <= 245 and g >= 140 and g <= 175 and b >= 45 and b <= 85 then return true end
+        return false
+    elseif target:find("koa") then
+        if tcStr:find("koa") then return true end
+        if r >= 155 and r <= 190 and g >= 70 and g <= 105 and b <= 25 then return true end
+        return false
+    elseif target:find("palm") then
+        if tcStr:find("palm") then return true end
+        if r >= 210 and r <= 245 and g >= 205 and g <= 235 and b >= 170 and b <= 205 then return true end
+        return false
+    elseif target:find("cherry") then
+        if tcStr:find("cherry") then return true end
+        if (r >= 130 and r <= 160 and g >= 60 and g <= 90 and b >= 30 and b <= 60) or
+           (r >= 95 and r <= 120 and g >= 50 and g <= 80 and b >= 30 and b <= 55) then
+            return true
+        end
+        return false
+    elseif target:find("fir") then
+        if tcStr:find("fir") then return true end
+        if r >= 145 and r <= 175 and g >= 160 and g <= 190 and b >= 175 and b <= 210 then return true end
+        return false
+    elseif target:find("pine") then
+        if tcStr:find("pine") then return true end
+        if r >= 200 and r <= 230 and g >= 180 and g <= 215 and b >= 140 and b <= 175 then return true end
+        return false
+    elseif target:find("spooky") or target:find("sinister") or target:find("zombie") then
+        return tcStr:find(target, 1, true) ~= nil
+    else
+        return tcStr ~= "" and tcStr:find(target, 1, true) ~= nil
+    end
+end
+
 local function executePlankMagnet()
     local _, root = getChar()
     if not root then return end
@@ -842,29 +1124,8 @@ local function executePlankMagnet()
                 end
 
                 if isEligible and selectedPlankType ~= "All" then
-                    local tc = item:FindFirstChild("TreeClass")
-                    local tcStr = tc and tostring(tc.Value):lower() or ""
-                    local targetPlank = selectedPlankType:lower()
-                    if targetPlank == "oak" or targetPlank == "generic" then
-                        if tcStr ~= "oak" and tcStr ~= "generic" then
-                            isEligible = false
-                        end
-                    elseif targetPlank:find("goldswampy") then
-                        if not tcStr:find("gold") then isEligible = false end
-                    elseif targetPlank:find("greenswampy") then
-                        if not tcStr:find("green") and not (tcStr:find("swamp") and not tcStr:find("gold")) then isEligible = false end
-                    elseif targetPlank:find("frost") then
-                        if not tcStr:find("frost") and not tcStr:find("ice") then isEligible = false end
-                    elseif targetPlank:find("snowglow") then
-                        if not tcStr:find("snowglow") and not (tcStr:find("glow") and not tcStr:find("frost")) then isEligible = false end
-                    elseif targetPlank:find("cavecrawler") or targetPlank:find("neon blue") then
-                        if not tcStr:find("cave") and not tcStr:find("crawler") then isEligible = false end
-                    elseif targetPlank:find("phantom") or targetPlank:find("end") then
-                        if not tcStr:find("phantom") and not tcStr:find("end") and not tcStr:find("lone") then isEligible = false end
-                    else
-                        if not tcStr:find(targetPlank, 1, true) then
-                            isEligible = false
-                        end
+                    if not matchesPlankType(item, selectedPlankType) then
+                        isEligible = false
                     end
                 end
 
@@ -974,25 +1235,8 @@ local function sellPlanksAtWoodRUs()
                 end
 
                 if isEligible and selectedPlankType ~= "All" then
-                    local tc = item:FindFirstChild("TreeClass")
-                    local tcStr = tc and tostring(tc.Value):lower() or ""
-                    local targetPlank = selectedPlankType:lower()
-                    if targetPlank == "oak" or targetPlank == "generic" then
-                        if tcStr ~= "oak" and tcStr ~= "generic" then isEligible = false end
-                    elseif targetPlank:find("goldswampy") then
-                        if not tcStr:find("gold") then isEligible = false end
-                    elseif targetPlank:find("greenswampy") then
-                        if not tcStr:find("green") and not (tcStr:find("swamp") and not tcStr:find("gold")) then isEligible = false end
-                    elseif targetPlank:find("frost") then
-                        if not tcStr:find("frost") and not tcStr:find("ice") then isEligible = false end
-                    elseif targetPlank:find("snowglow") then
-                        if not tcStr:find("snowglow") and not (tcStr:find("glow") and not tcStr:find("frost")) then isEligible = false end
-                    elseif targetPlank:find("cavecrawler") or targetPlank:find("neon blue") then
-                        if not tcStr:find("cave") and not tcStr:find("crawler") then isEligible = false end
-                    elseif targetPlank:find("phantom") or targetPlank:find("end") then
-                        if not tcStr:find("phantom") and not tcStr:find("end") and not tcStr:find("lone") then isEligible = false end
-                    else
-                        if not tcStr:find(targetPlank, 1, true) then isEligible = false end
+                    if not matchesPlankType(item, selectedPlankType) then
+                        isEligible = false
                     end
                 end
 
@@ -1108,27 +1352,17 @@ local function chopUntilFell(targetType)
         local lastHealth = initHum and initHum.Health or 100
 
         while isManualChopping and (tick() - startTime < maxDuration) do
-            if not tree or not tree.Parent or not tree:IsDescendantOf(workspace) then
-                break
-            end
-
-            if tree:FindFirstChild("RootCut") then
-                break
-            end
+            if not tree or not tree.Parent or not tree:IsDescendantOf(workspace) then break end
+            if tree:FindFirstChild("RootCut") then break end
 
             if not section or not section.Parent or not section:IsDescendantOf(tree) then
                 section = findLowestSection(tree)
-                if not section then
-                    break
-                end
+                if not section then break end
             end
 
             local liveChar, liveRoot, liveHum = getChar()
-            if not liveHum or liveHum.Health <= 0 or not liveRoot then
-                break
-            end
+            if not liveHum or liveHum.Health <= 0 or not liveRoot then break end
 
-            -- Anti-Cheat Protection Guard: If player took damage during a strike, stop immediately to save character
             if liveHum.Health < lastHealth - 1 then
                 Non:Notify({
                     Title = "Protected",
@@ -1140,7 +1374,6 @@ local function chopUntilFell(targetType)
             end
             lastHealth = liveHum.Health
 
-            -- Ensure player stays close to the target section
             local curDist = (section.Position - liveRoot.Position).Magnitude
             if curDist > 9 then
                 local targetPos = section.Position + Vector3.new(2.5, 0.5, 2.5)
@@ -1271,13 +1504,8 @@ local function startAutoChopFarm(targetType)
             local lastHealth = initHum and initHum.Health or 100
 
             while autoChopFarmActive and isManualChopping and (tick() - startTime < maxDuration) do
-                if not tree or not tree.Parent or not tree:IsDescendantOf(workspace) then
-                    break
-                end
-
-                if tree:FindFirstChild("RootCut") then
-                    break
-                end
+                if not tree or not tree.Parent or not tree:IsDescendantOf(workspace) then break end
+                if tree:FindFirstChild("RootCut") then break end
 
                 if not section or not section.Parent or not section:IsDescendantOf(tree) then
                     section = findLowestSection(tree)
@@ -1323,7 +1551,6 @@ local function startAutoChopFarm(targetType)
             if not autoChopFarmActive or not scriptRunning then break end
 
             felledCount = felledCount + 1
-
             task.wait(0.6)
 
             local lm = workspace:FindFirstChild("LogModels")
@@ -1381,6 +1608,8 @@ local function startAutoChopFarm(targetType)
     end)
 end
 
+-- ==================== INTERFAZ ====================
+
 local Win = Non:CreateWindow({
     Title = "RealOrCake Hub | LT2",
     Author = "Leo",
@@ -1391,12 +1620,14 @@ local Win = Non:CreateWindow({
 })
 
 local MainSec = Win:Section({ Title = "Bring" })
+local SawmillSec = Win:Section({ Title = "Sawmill" })
 local WorldSec = Win:Section({ Title = "Locations / TPs" })
 local ExtraSec = Win:Section({ Title = "Extra" })
 local PlayerSec = Win:Section({ Title = "Player & Settings" })
 
 local treeTab = MainSec:Tab({ Title = "Bring Tree", Icon = "trees" })
 local woodTab = MainSec:Tab({ Title = "Bring Items", Icon = "package" })
+local sawmillTab = SawmillSec:Tab({ Title = "Sawmill", Icon = "cog" })
 local tpTab = WorldSec:Tab({ Title = "Teleports", Icon = "map-pin" })
 local extraTab = ExtraSec:Tab({ Title = "Extra / Dupe", Icon = "sparkles" })
 local miscTab = PlayerSec:Tab({ Title = "Settings", Icon = "sliders" })
@@ -1591,6 +1822,70 @@ woodTab:Toggle({
     end
 })
 
+
+sawmillTab:Section("Sawmill")
+
+sawmillTab:Button({
+    Title = "Detect Sawmill",
+    Icon = "search",
+    Callback = function()
+        local saw, sawType = getMySawmax()
+        if saw then
+            local main = getItemMainPart(saw)
+            local posStr = main and string.format("(%.1f, %.1f, %.1f)", main.Position.X, main.Position.Y, main.Position.Z) or ""
+            Non:Notify({
+                Title = "Machine Detected",
+                Content = string.format("%s found on your plot at %s!", sawType or "Sawmax 02L", posStr),
+                Icon = "circle-check",
+                Duration = 4
+            })
+        else
+            Non:Notify({
+                Title = "Not Found",
+                Content = "Sawmill not found on your plot.",
+                Icon = "alert-triangle",
+                Duration = 3
+            })
+        end
+    end
+})
+
+sawmillTab:Button({
+    Title = "Send Logs to Sawmill",
+    Icon = "arrow-right-circle",
+    Callback = function()
+        sendLogsToSawmax()
+    end
+})
+
+sawmillTab:Toggle({
+    Title = "Auto-Send Logs to Sawmill",
+    Default = false,
+    Callback = function(state)
+        autoSawmaxActive = state
+        if state then
+            Non:Notify({Title = "Auto-Feed Sawmill", Content = "Continuous log feeding to Sawmill active.", Icon = "circle-check", Duration = 3})
+        end
+    end
+})
+
+sawmillTab:Button({
+    Title = "Teleport to Sawmill",
+    Icon = "map-pin",
+    Callback = function()
+        local saw = getMySawmax()
+        if saw then
+            local main = getItemMainPart(saw)
+            if main then
+                safeTeleport(main.CFrame * CFrame.new(0, 4, 4))
+                Non:Notify({Title = "Teleported", Content = "Arrived at your Sawmill.", Icon = "circle-check", Duration = 3})
+            end
+        else
+            Non:Notify({Title = "Error", Content = "sawmill not found on plot.", Icon = "alert-triangle", Duration = 3})
+        end
+    end
+})
+
 tpTab:Section("Base Management")
 
 tpTab:Button({
@@ -1733,7 +2028,6 @@ local function triggerVoidAndReload()
         Duration = 3
     })
     
-    -- 1. Send player directly to the exact point (78.2, -254.0, 56.9)
     if root then
         root.Velocity = Vector3.new(0, 0, 0)
         root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
@@ -1746,7 +2040,6 @@ local function triggerVoidAndReload()
         local isDead = false
         local t0 = os.clock()
         
-        -- 2. Detect death
         while (os.clock() - t0) < 15 do
             if not startChar or not startChar.Parent then
                 isDead = true
@@ -1763,7 +2056,6 @@ local function triggerVoidAndReload()
             task.wait(0.03)
         end
         
-        -- 3. If death occurred, reload the plot immediately
         if isDead then
             local ok, msg = reloadPlotSlot(targetSlot)
             if ok then
@@ -1867,6 +2159,7 @@ miscTab:Button({
         autoItemMagnetActive = false
         autoPlankMagnetActive = false
         autoChopFarmActive = false
+        autoSawmaxActive = false
         isManualChopping = false
         local _, _, hum = getChar()
         if hum then hum.WalkSpeed = 16 end
@@ -1884,6 +2177,7 @@ _G.LT2_NonUI_Cleanup = function()
     autoItemMagnetActive = false
     autoPlankMagnetActive = false
     autoChopFarmActive = false
+    autoSawmaxActive = false
     isManualChopping = false
 end
 
@@ -1893,6 +2187,15 @@ task.spawn(function()
             pcall(executeWoodMagnet)
         end
         task.wait(3.5)
+    end
+end)
+
+task.spawn(function()
+    while scriptRunning do
+        if autoSawmaxActive then
+            pcall(sendLogsToSawmax)
+        end
+        task.wait(4.0)
     end
 end)
 
