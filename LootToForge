@@ -12,6 +12,7 @@ local RunService = game:GetService("RunService")
 
 local lp = Players.LocalPlayer
 local remotes = ReplicatedStorage:FindFirstChild("Remote")
+local Window = nil
 
 local STATE = {
     Running = true,
@@ -19,6 +20,7 @@ local STATE = {
     InstaKill = false,
     AutoCollectOres = false,
     Zone27Loop = false,
+    TowerFarm = false,
     GodMode = false,
     BypassBarriers = false,
     AutoRebirth = false,
@@ -132,8 +134,10 @@ local function teleportTo(pos)
     local curPos, hrp = getHRPPosition()
     if not hrp then return false end
     local x, y, z = pos.X, pos.Y + 3.5, pos.Z
-    pcall(function() hrp.CFrame = CFrame.new(x, y, z) end)
-    pcall(function() hrp.Position = Vector3.new(x, y, z) end)
+    pcall(function()
+        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        hrp.CFrame = CFrame.new(x, y, z)
+    end)
     return true
 end
 
@@ -150,9 +154,10 @@ end
 
 local function teleportToSpawn()
     pcall(function()
-        local tu = require(ReplicatedStorage.Utils.TranslateUtils)
+        local tu = nil
+        pcall(function() tu = require(ReplicatedStorage.Utils.TranslateUtils) end)
         if tu and tu.ToSpawn and lp.Character then
-            tu.ToSpawn(lp.Character)
+            pcall(function() tu.ToSpawn(lp.Character) end)
         end
     end)
     task.wait(0.08)
@@ -185,41 +190,42 @@ local function tweenToPosition(targetPos, duration, isLoop)
     local finished = false
 
     conn = RunService.RenderStepped:Connect(function()
-        if not STATE.Running or (isLoop and not STATE.Zone27Loop) then
-            if conn then conn:Disconnect() conn = nil end
-            finished = true
-            return
-        end
-
-        local elapsed = tick() - startTime
-        if elapsed >= d then
-            if conn then conn:Disconnect() conn = nil end
-            pcall(function()
-                hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-                hrp.Velocity = Vector3.new(0, 0, 0)
-                hrp.CFrame = CFrame.new(targetPos.X, endGroundY, targetPos.Z)
-            end)
-            finished = true
-            return
-        end
-
-        local alpha = math.clamp(elapsed / d, 0, 1)
-        local t = (1 - math.cos(alpha * math.pi)) / 2
-
-        local curX = startPos.X + (targetPos.X - startPos.X) * t
-        local curZ = startPos.Z + (targetPos.Z - startPos.Z) * t
-        local curY = groundY + (endGroundY - groundY) * t
-
         pcall(function()
+            if not STATE.Running or (isLoop and not STATE.Zone27Loop) then
+                if conn then conn:Disconnect() conn = nil end
+                finished = true
+                return
+            end
+
+            local elapsed = tick() - startTime
+            if elapsed >= d then
+                if conn then conn:Disconnect() conn = nil end
+                pcall(function()
+                    hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                    hrp.CFrame = CFrame.new(targetPos.X, endGroundY, targetPos.Z)
+                end)
+                finished = true
+                return
+            end
+
+            local alpha = math.clamp(elapsed / d, 0, 1)
+            local t = (1 - math.cos(alpha * math.pi)) / 2
+
+            local curX = startPos.X + (targetPos.X - startPos.X) * t
+            local curZ = startPos.Z + (targetPos.Z - startPos.Z) * t
+            local curY = groundY + (endGroundY - groundY) * t
+
             hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-            hrp.Velocity = Vector3.new(0, 0, 0)
-            local ok = pcall(function()
-                hrp.CFrame = CFrame.lookAt(
-                    Vector3.new(curX, curY, curZ),
-                    Vector3.new(targetPos.X, curY, targetPos.Z)
-                )
-            end)
-            if not ok then
+            local fromPos = Vector3.new(curX, curY, curZ)
+            local toPos = Vector3.new(targetPos.X, curY, targetPos.Z)
+            if (fromPos - toPos).Magnitude > 0.05 then
+                local ok = pcall(function()
+                    hrp.CFrame = CFrame.lookAt(fromPos, toPos)
+                end)
+                if not ok then
+                    hrp.CFrame = CFrame.new(curX, curY, curZ)
+                end
+            else
                 hrp.CFrame = CFrame.new(curX, curY, curZ)
             end
         end)
@@ -294,7 +300,8 @@ local function teleportToStage(stageNum)
     if not targetPos then return false end
 
     pcall(function()
-        local tu = require(ReplicatedStorage.Utils.TranslateUtils)
+        local tu = nil
+        pcall(function() tu = require(ReplicatedStorage.Utils.TranslateUtils) end)
         if tu and tu.ToStage and lp.Character then
             tu.ToStage(lp.Character, stageNum)
         end
@@ -354,44 +361,123 @@ local function getBestTrainArea()
     return fallback, fallback.pos, rebirths
 end
 
+local lastKillTime = 0
+local EnemyCTRLCache = nil
+local HPCTRLCache = nil
+local StageUtilsCache = nil
+
+local function getEnemyModules()
+    if not EnemyCTRLCache then
+        pcall(function()
+            local ctrl = ReplicatedStorage:FindFirstChild("CTRL")
+            if ctrl and ctrl:FindFirstChild("EnemyCTRL") then
+                EnemyCTRLCache = require(ctrl.EnemyCTRL)
+            end
+        end)
+    end
+    if not HPCTRLCache then
+        pcall(function()
+            local ctrl = ReplicatedStorage:FindFirstChild("CTRL")
+            if ctrl and ctrl:FindFirstChild("HPCTRL") then
+                HPCTRLCache = require(ctrl.HPCTRL)
+            end
+        end)
+    end
+    if not StageUtilsCache then
+        pcall(function()
+            local mgr = lp:FindFirstChild("PlayerScripts") and lp.PlayerScripts:FindFirstChild("Manager")
+            local sm = mgr and mgr:FindFirstChild("StageManager")
+            if sm and sm:FindFirstChild("StageUtils") then
+                StageUtilsCache = require(sm.StageUtils)
+            end
+        end)
+    end
+    return EnemyCTRLCache, HPCTRLCache, StageUtilsCache
+end
+
+local function isSafeToClick()
+ 
+    if not STATE.Running then return false end
+    if not (STATE.InstaKill or STATE.AutoFarm or STATE.Zone27Loop or STATE.TowerFarm) then return false end
+
+ 
+    if isrbxactive then
+        local ok, active = pcall(isrbxactive)
+        if ok and active == false then return false end
+    end
+
+    local mouse = lp:GetMouse()
+    local mx, my = mouse and mouse.X, mouse and mouse.Y
+    if type(mx) ~= "number" or type(my) ~= "number" then return false end
+
+    local cam = Workspace.CurrentCamera
+    local vp = (cam and cam.ViewportSize) or Vector2.new(1920, 1080)
+
+  
+    local w = Window
+    if w and w.open and w.x and w.y and w.w and w.h then
+        if mx >= w.x - 10 and mx <= w.x + w.w + 10 and my >= w.y - 10 and my <= w.y + w.h + 10 then
+            return false
+        end
+    end
+
+ 
+    if my <= 130 then return false end                                  
+    if my >= vp.Y - 140 then return false end                            
+    if mx <= 280 and my <= 780 then return false end                    
+    if mx >= vp.X - 280 and my <= vp.Y - 140 then return false end       
+
+    -- Botones izquierdos exactos
+    local pg = lp:FindFirstChild("PlayerGui")
+    local hud = pg and pg:FindFirstChild("Hud")
+    local left = hud and hud:FindFirstChild("Left")
+    local buttons = left and left:FindFirstChild("Buttons")
+    if buttons then
+        for _, btn in ipairs(buttons:GetChildren()) do
+            local pos = btn.AbsolutePosition
+            if pos and pos.X and pos.Y then
+                if mx >= pos.X - 15 and mx <= pos.X + 115 and my >= pos.Y - 15 and my <= pos.Y + 115 then
+                    return false
+                end
+            end
+        end
+    end
+
+
+    local mainGui = pg and pg:FindFirstChild("Main")
+    if mainGui then
+        for _, name in ipairs({ "Backpack", "Index", "Rebirth" }) do
+            local win = mainGui:FindFirstChild(name)
+            local p = win and win.AbsolutePosition
+            if p and p.Y and p.Y > 0 and p.Y < vp.Y then
+                return false
+            end
+        end
+    end
+
+    return true
+end
+
 local function killStageEnemies()
+    local now = tick()
+    if now - lastKillTime < 0.08 then return 0 end
+    lastKillTime = now
+
     local remotes = ReplicatedStorage:FindFirstChild("Remote")
     local attackFolder = remotes and remotes:FindFirstChild("Attack")
     local enemyHitBE = attackFolder and attackFolder:FindFirstChild("EnemyHitBE")
     local attackEnemyBE = attackFolder and attackFolder:FindFirstChild("AttackEnemyBE")
     local dummyHitBE = attackFolder and attackFolder:FindFirstChild("DummyHitBE")
     local atkOnceBE = attackFolder and attackFolder:FindFirstChild("ATKOnceBE")
+    local killRE = attackFolder and attackFolder:FindFirstChild("KillEnemyRE")
+    local useAtkRE = attackFolder and attackFolder:FindFirstChild("UseAnyATKRE")
 
-    local EnemyCTRL = nil
-    pcall(function()
-        local ctrl = ReplicatedStorage:FindFirstChild("CTRL")
-        if ctrl and ctrl:FindFirstChild("EnemyCTRL") then
-            EnemyCTRL = require(ctrl.EnemyCTRL)
-        end
-    end)
-
-    local HPCTRL = nil
-    pcall(function()
-        local ctrl = ReplicatedStorage:FindFirstChild("CTRL")
-        if ctrl and ctrl:FindFirstChild("HPCTRL") then
-            HPCTRL = require(ctrl.HPCTRL)
-        end
-    end)
-
-    local StageUtils = nil
-    pcall(function()
-        local mgr = lp:FindFirstChild("PlayerScripts") and lp.PlayerScripts:FindFirstChild("Manager")
-        local sm = mgr and mgr:FindFirstChild("StageManager")
-        if sm and sm:FindFirstChild("StageUtils") then
-            StageUtils = require(sm.StageUtils)
-        end
-    end)
-
+    local EnemyCTRL, HPCTRL, StageUtils = getEnemyModules()
     local count = 0
 
     local enemyFolder = Workspace:FindFirstChild("EnemyFolder")
+    local enemyNames = {}
     if enemyFolder then
-        local enemyNames = {}
         for _, enemy in ipairs(enemyFolder:GetChildren()) do
             local hp = enemy:FindFirstChild("HPValue") or enemy:FindFirstChild("HPValue", true)
             local isDead = enemy:GetAttribute("Dead")
@@ -486,6 +572,26 @@ local function killStageEnemies()
         pcall(function() atkOnceBE:Fire() end)
     end
 
+    pcall(function()
+        if mouse1click and isSafeToClick() then mouse1click() end
+    end)
+
+    pcall(function()
+        if killRE and #enemyNames > 0 then
+            for _, name in ipairs(enemyNames) do
+                killRE:FireServer(name)
+            end
+        end
+    end)
+
+    pcall(function()
+        if useAtkRE then
+            local wType = lp:GetAttribute("WeaponType") or "Katana"
+            local prefix = (wType == "Great") and "G_ATK_" or "K_ATK_"
+            useAtkRE:FireServer(prefix .. "1", workspace:GetServerTimeNow())
+        end
+    end)
+
     return count
 end
 
@@ -549,29 +655,96 @@ local function freezeOre(ore)
     end
 end
 
-local function spinInPlace(duration)
+local function getBackpackInfo()
+    local isFull = false
+    local cur = nil
+    local maxNum = nil
+
+    pcall(function()
+        local hud = lp:FindFirstChild("PlayerGui") and lp.PlayerGui:FindFirstChild("Hud")
+        local leftInfos = hud and hud:FindFirstChild("LeftInfos")
+        local orePack = leftInfos and leftInfos:FindFirstChild("OrePack")
+        local title = orePack and orePack:FindFirstChild("Title")
+        if title and title.Text then
+            local cStr, mStr = tostring(title.Text):match("(%d+)%s*/%s*(%d+)")
+            if cStr and mStr then
+                cur = tonumber(cStr)
+                maxNum = tonumber(mStr)
+            end
+        end
+    end)
+
+    if cur == nil or maxNum == nil then
+        pcall(function()
+            local pgui = lp:FindFirstChild("PlayerGui")
+            if pgui then
+                local orePack = pgui:FindFirstChild("OrePack", true)
+                if orePack then
+                    for _, desc in ipairs(orePack:GetDescendants()) do
+                        if desc:IsA("TextLabel") and desc.Text then
+                            local cStr, mStr = tostring(desc.Text):match("(%d+)%s*/%s*(%d+)")
+                            if cStr and mStr then
+                                cur = tonumber(cStr)
+                                maxNum = tonumber(mStr)
+                                break
+                            end
+                        end
+                    end
+                end
+            end
+        end)
+    end
+
+    if cur and maxNum and maxNum > 0 then
+        isFull = (cur >= maxNum)
+    end
+
+    return isFull, cur or 0, maxNum or 0
+end
+
+local function getGroundOreCount()
+    local count = 0
+    pcall(function()
+        local oreCache = Workspace:FindFirstChild("OreCache")
+        if oreCache then
+            count = #oreCache:GetChildren()
+        end
+    end)
+    return count
+end
+
+local function spinInPlace(duration, conditionCheck, fixedPos)
     local curPos, hrp = getHRPPosition()
-    if not curPos or not hrp then return end
-    local x, y, z = curPos.X, curPos.Y, curPos.Z
+    if not hrp then return end
+
+    local x, y, z
+    if fixedPos and typeof(fixedPos) == "Vector3" then
+        x, y, z = fixedPos.X, fixedPos.Y, fixedPos.Z
+    elseif curPos then
+        x, y, z = curPos.X, curPos.Y, curPos.Z
+    else
+        return
+    end
 
     local startTime = tick()
     local angle = 0
     while tick() - startTime < (duration or 3.0) do
-        if not STATE.Running or not STATE.Zone27Loop then break end
+        if not STATE.Running then break end
+        if conditionCheck then
+            if not conditionCheck() then break end
+        else
+            if not STATE.Zone27Loop and not STATE.TowerFarm then break end
+        end
+
+        local _, liveHRP = getHRPPosition()
+        if not liveHRP then break end
 
         angle = (angle + 30) % 360
         local rad = math.rad(angle)
 
         pcall(function()
-            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-            hrp.Velocity = Vector3.new(0, 0, 0)
-            local ok = pcall(function()
-                hrp.CFrame = CFrame.new(x, y, z) * CFrame.Angles(0, rad, 0)
-            end)
-            if not ok then
-                hrp.CFrame = CFrame.lookAt(Vector3.new(x, y, z), Vector3.new(x + math.sin(rad), y, z + math.cos(rad)))
-            end
-            hrp.Position = Vector3.new(x, y, z)
+            liveHRP.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            liveHRP.CFrame = CFrame.new(x, y, z) * CFrame.Angles(0, rad, 0)
         end)
 
         killStageEnemies()
@@ -581,6 +754,9 @@ end
 
 local function goToAndCollectOre(ore, oreCache)
     if not ore or ore.Parent ~= oreCache then return false end
+
+    local isFull = getBackpackInfo()
+    if isFull then return false end
 
     local orePos = getOrePosition(ore)
     if not orePos then return false end
@@ -595,7 +771,6 @@ local function goToAndCollectOre(ore, oreCache)
         if freshOrePos and hrp then
             local tx, ty, tz = freshOrePos.X, freshOrePos.Y + 1.2, freshOrePos.Z
             hrp.CFrame = CFrame.new(tx, ty, tz)
-            hrp.Position = Vector3.new(tx, ty, tz)
             hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
             hrp.Velocity = Vector3.new(0, 0, 0)
         end
@@ -621,6 +796,9 @@ local function goToAndCollectOre(ore, oreCache)
                 if not ore or ore.Parent ~= oreCache or not STATE.Running or not (STATE.AutoCollectOres or STATE.Zone27Loop) then
                     break
                 end
+                local isFullNow = getBackpackInfo()
+                if isFullNow then break end
+
                 local _, curHRP = getHRPPosition()
                 if curHRP then
                     curHRP.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
@@ -647,6 +825,9 @@ local function collectAllOresThoroughly()
     local pass = 0
 
     while STATE.Running and (STATE.AutoCollectOres or STATE.Zone27Loop) and pass < maxPasses do
+        local isFull = getBackpackInfo()
+        if isFull then break end
+
         pass = pass + 1
         local ores = oreCache:GetChildren()
         if #ores == 0 then
@@ -655,6 +836,9 @@ local function collectAllOresThoroughly()
 
         for _, ore in ipairs(ores) do
             if not STATE.Running or not (STATE.AutoCollectOres or STATE.Zone27Loop) then break end
+            local isFullNow = getBackpackInfo()
+            if isFullNow then break end
+
             if ore and ore.Parent == oreCache then
                 if goToAndCollectOre(ore, oreCache) then
                     totalCollected = totalCollected + 1
@@ -688,7 +872,7 @@ local function redeemAllRewards()
     end)
 end
 
-local Window = Non:CreateWindow({
+Window = Non:CreateWindow({
     Title = "RealOrCake +1 loot to forge",
     Folder = "RealOrCakeHub",
     Theme = "Emerald",
@@ -699,22 +883,29 @@ local Window = Non:CreateWindow({
 Window:SetToggleKey("h")
 
 local autoFarmToggle, instaKillToggle, autoCollectToggle, godModeToggle, barrierToggle
+local zone27LoopToggle, towerFarmToggle
 
 local LoopSection = Window:Section({ Title = "AutoFarm" })
 local LoopTab = LoopSection:Tab({ Title = "Zone 27", Icon = "crosshair" })
 
-local zone27LoopToggle = LoopTab:Toggle({
+zone27LoopToggle = LoopTab:Toggle({
     Title = "AutoFarm Zone 27",
     Default = false,
     Callback = function(on)
         STATE.Zone27Loop = on
         if on then
+            if STATE.TowerFarm then
+                STATE.TowerFarm = false
+                if towerFarmToggle and towerFarmToggle.Set then
+                    pcall(function() towerFarmToggle:Set(false) end)
+                end
+            end
             STATE.GodMode = true
             STATE.AutoFarm = true
             STATE.InstaKill = true
             STATE.AutoCollectOres = true
             STATE.BypassBarriers = true
-            if autoFarmToggle and autoFarmToggle.Set then pcall(function() autoFarmToggle:Set(true) end) end
+
             if autoCollectToggle and autoCollectToggle.Set then pcall(function() autoCollectToggle:Set(true) end) end
             if godModeToggle and godModeToggle.Set then pcall(function() godModeToggle:Set(true) end) end
             if barrierToggle and barrierToggle.Set then pcall(function() barrierToggle:Set(true) end) end
@@ -727,9 +918,50 @@ local zone27LoopToggle = LoopTab:Toggle({
     end
 })
 
-local MainSection = Window:Section({ Title = "Features" })
+towerFarmToggle = LoopTab:Toggle({
+    Title = "AutoFarm Tower",
+    Default = false,
+    Callback = function(on)
+        STATE.TowerFarm = on
+        if on then
+            if STATE.Zone27Loop then
+                STATE.Zone27Loop = false
+                if zone27LoopToggle and zone27LoopToggle.Set then
+                    pcall(function() zone27LoopToggle:Set(false) end)
+                end
+            end
+            STATE.GodMode = true
+            STATE.InstaKill = true
+            STATE.BypassBarriers = true
+            STATE.AutoCollectOres = false
 
+            if godModeToggle and godModeToggle.Set then pcall(function() godModeToggle:Set(true) end) end
+            if barrierToggle and barrierToggle.Set then pcall(function() barrierToggle:Set(true) end) end
+            applyGodMode()
+            applyBarrierBypass()
+            say("AutoFarm Tower", "Enabled! Starting Tower farm", "zap")
+        else
+
+            STATE.TowerFarm = false
+            STATE.InstaKill = false
+            STATE.AutoFarm = false
+            if instaKillToggle and instaKillToggle.Set then
+                pcall(function() instaKillToggle:Set(false) end)
+            end
+            STATE.InstaKill = false
+            STATE.AutoFarm = false
+            pcall(function()
+                if mouse1release then mouse1release() end
+            end)
+            say("AutoFarm Tower", "Disabled", "circlex")
+        end
+    end
+})
+
+local MainSection = Window:Section({ Title = "Features" })
 local CombatTab = MainSection:Tab({ Title = "Combat", Icon = "crosshair" })
+
+local instaKillThread = nil
 
 instaKillToggle = CombatTab:Toggle({
     Title = "Insta-kill",
@@ -738,12 +970,14 @@ instaKillToggle = CombatTab:Toggle({
         STATE.InstaKill = on
         STATE.AutoFarm = on
         if on then
-            task.spawn(function()
-                while STATE.Running and (STATE.InstaKill or STATE.AutoFarm) do
-                    killStageEnemies()
-                    task.wait(0.1)
-                end
-            end)
+            if not instaKillThread or coroutine.status(instaKillThread) == "dead" then
+                instaKillThread = task.spawn(function()
+                    while STATE.Running and (STATE.InstaKill or STATE.AutoFarm) do
+                        killStageEnemies()
+                        task.wait(0.1)
+                    end
+                end)
+            end
         end
         say("Insta-kill", on and "Enabled" or "Disabled", on and "circlecheck" or "circlex")
     end
@@ -902,12 +1136,12 @@ end)
 
 task.spawn(function()
     while STATE.Running do
-        if STATE.AutoCollectOres and not STATE.Zone27Loop then
+        if STATE.AutoCollectOres and not STATE.Zone27Loop and not STATE.TowerFarm then
             local oreCache = Workspace:FindFirstChild("OreCache")
             local ores = oreCache and oreCache:GetChildren()
             if ores and #ores > 0 then
                 for _, ore in ipairs(ores) do
-                    if not STATE.Running or not STATE.AutoCollectOres or STATE.Zone27Loop then break end
+                    if not STATE.Running or not STATE.AutoCollectOres or STATE.Zone27Loop or STATE.TowerFarm then break end
                     if ore and ore.Parent == oreCache then
                         goToAndCollectOre(ore, oreCache)
                     end
@@ -928,29 +1162,52 @@ task.spawn(function()
             applyGodMode()
             applyBarrierBypass()
 
-            say("AutoFarm Zone 27", "Teleporting to Zone 27...", "play")
-            teleportToStage(27)
-            task.wait(0.8)
+            local isFullInitial, curInitial, maxInitial = getBackpackInfo()
+            if isFullInitial then
+                say("AutoFarm Zone 27", string.format("Backpack already full (%d/%d)! Bringing ores to Zone 1...", curInitial, maxInitial), "alerttriangle")
+            else
+                say("AutoFarm Zone 27", "Teleporting to Zone 27...", "play")
+                teleportToStage(27)
+                task.wait(0.8)
 
-            say("AutoFarm Zone 27", "Spinning on axis & eliminating enemies...", "crosshair")
-            spinInPlace(3.5)
+                say("AutoFarm Zone 27", "Spinning on axis & eliminating enemies...", "crosshair")
+                spinInPlace(3.5)
 
-            say("AutoFarm Zone 27", "Waiting for ore drops...", "clock")
-            task.wait(1.8)
+                say("AutoFarm Zone 27", "Waiting for ore drops...", "clock")
+                task.wait(1.8)
 
-            say("AutoFarm Zone 27", "Collecting all dropped ores...", "download")
-            local collected = collectAllOresThoroughly()
-            say("AutoFarm Zone 27", string.format("Collected %d ores!", collected), "circlecheck")
-            task.wait(0.6)
+                say("AutoFarm Zone 27", "Collecting all dropped ores...", "download")
+                local collected = collectAllOresThoroughly()
+                say("AutoFarm Zone 27", string.format("Collected %d ores!", collected), "circlecheck")
+                task.wait(0.6)
 
-            local extraCache = Workspace:FindFirstChild("OreCache")
-            if extraCache and #extraCache:GetChildren() > 0 then
-                collectAllOresThoroughly()
-                task.wait(0.4)
+                local extraCache = Workspace:FindFirstChild("OreCache")
+                if extraCache and #extraCache:GetChildren() > 0 then
+                    local isF = getBackpackInfo()
+                    if not isF then
+                        collectAllOresThoroughly()
+                        task.wait(0.4)
+                    end
+                end
             end
 
-            if STATE.Running and STATE.Zone27Loop then
-                say("AutoFarm Zone 27", "All ores collected! TP to Zone 1...", "fastforward")
+ 
+            local backpackFull, curP, maxP = getBackpackInfo()
+            local groundCount = getGroundOreCount()
+
+            local shouldReturn = false
+            local returnReason = ""
+
+            if backpackFull then
+                shouldReturn = true
+                returnReason = string.format("Backpack full (%d/%d)", curP, maxP)
+            elseif groundCount == 0 then
+                shouldReturn = true
+                returnReason = string.format("No ores on ground (%d/%d bag)", curP, maxP)
+            end
+
+            if shouldReturn and STATE.Running and STATE.Zone27Loop then
+                say("AutoFarm Zone 27", returnReason .. "! Returning minerals...", "fastforward")
                 teleportToStage(1)
                 say("AutoFarm Zone 27", "Waiting in Zone 1 to load chunks & loot...", "clock")
                 task.wait(1.2)
@@ -973,9 +1230,80 @@ task.spawn(function()
                 task.wait(0.4)
                 say("AutoFarm Zone 27", "Materials received! Arrived at Spawn", "circlecheck")
                 task.wait(0.8)
+            else
+                task.wait(0.5)
             end
+        else
+            task.wait(0.2)
         end
-        task.wait(0.2)
+    end
+end)
+
+-- Bucle AutoFarm Tower 
+task.spawn(function()
+    local dungeonArenaPos = Vector3.new(3481.85, 24.16, 94.76)
+
+    while STATE.Running do
+        if STATE.TowerFarm then
+            STATE.GodMode = true
+            STATE.InstaKill = true
+            STATE.BypassBarriers = true
+            STATE.AutoCollectOres = false
+            applyGodMode()
+            applyBarrierBypass()
+
+            local inDungeon = (lp:GetAttribute("IntoFight") == "Dungeon")
+            if not inDungeon then
+                say("AutoFarm Tower", "Entering Dungeon...", "play")
+                pcall(function()
+                    if remotes and remotes:FindFirstChild("Dungeon") then
+                        local dun = remotes.Dungeon
+                        if dun:FindFirstChild("TryClaimDailyDunTicRE") then
+                            dun.TryClaimDailyDunTicRE:FireServer()
+                        end
+                        if dun:FindFirstChild("TryIntoDungeonRF") then
+                            dun.TryIntoDungeonRF:InvokeServer(1)
+                        end
+                    end
+                end)
+
+                local waitStart = tick()
+                while tick() - waitStart < 3.5 do
+                    if not STATE.Running or not STATE.TowerFarm then break end
+                    if lp:GetAttribute("IntoFight") == "Dungeon" then
+                        task.wait(1.5)
+                        break
+                    end
+                    task.wait(0.2)
+                end
+            end
+
+            if STATE.Running and STATE.TowerFarm and lp:GetAttribute("IntoFight") == "Dungeon" then
+                local _, hrp = getHRPPosition()
+                if hrp and hrp.Anchored then
+                    pcall(function() hrp.Anchored = false end)
+                end
+                teleportTo(dungeonArenaPos)
+                task.wait(0.3)
+
+                say("AutoFarm Tower", "In Arena - Fighting waves...", "crosshair")
+
+                while STATE.Running and STATE.TowerFarm and (lp:GetAttribute("IntoFight") == "Dungeon") do
+
+                    spinInPlace(2.0, function()
+                        return STATE.Running and STATE.TowerFarm and (lp:GetAttribute("IntoFight") == "Dungeon")
+                    end, dungeonArenaPos)
+                    task.wait(0.08)
+                end
+
+                say("AutoFarm Tower", "Dungeon run finished or exited! Re-checking...", "circlecheck")
+                task.wait(1.5)
+            else
+                task.wait(0.8)
+            end
+        else
+            task.wait(0.5)
+        end
     end
 end)
 
@@ -1041,17 +1369,18 @@ task.spawn(function()
         end
         applyBarrierBypass()
 
-        if STATE.AutoFarm or STATE.Zone27Loop or STATE.InstaKill then
+        if (STATE.AutoFarm or STATE.InstaKill) and not STATE.Zone27Loop and not STATE.TowerFarm then
             killStageEnemies()
         end
 
-        task.wait((STATE.AutoFarm or STATE.InstaKill) and 0.1 or 0.2)
+        task.wait(0.15)
     end
 end)
 
 _G.MatchaLootForgeHubCleanup = function()
     STATE.Running = false
     STATE.Zone27Loop = false
+    STATE.TowerFarm = false
     STATE.AutoFarm = false
     STATE.InstaKill = false
     STATE.AutoCollectOres = false
@@ -1060,7 +1389,7 @@ _G.MatchaLootForgeHubCleanup = function()
     end
     pcall(function()
         local trainFolder = remotes and remotes:FindFirstChild("Train")
-        local exitRE = trainFolder and trainFolder:FindFirstChild("ExitAutoTrainRE")
+        local exitRE = trainFolder and trainFolder:FindFirstChild("ExitAutoTrainREee")
         if exitRE then exitRE:FireServer() end
         lp:SetAttribute("AutoTrainAreaID", nil)
     end)
