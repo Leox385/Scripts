@@ -1,0 +1,2626 @@
+-- Runtime adapter for Drawing-based Matcha LuaVM interfaces.
+local typeOf = typeof or type
+local function safeGet(object, key)
+    if object == nil then return nil end
+    local ok, value = pcall(function() return object[key] end)
+    return ok and value or nil
+end
+local function service(name)
+    local ok, value = pcall(function() return game:GetService(name) end)
+    return ok and value or nil
+end
+local function startupFailure(message)
+    local out=warn or print
+    if type(out)=="function" then pcall(out,"[Astra] "..message) end
+end
+if not Drawing or type(safeGet(Drawing,"new"))~="function" or not Vector2 or not Color3 then
+    startupFailure("Entorno incompatible: Drawing.new, Vector2 y Color3 son necesarios")
+    return nil
+end
+local taskHost = task or {}
+local spawnHost = taskHost.spawn or spawn
+local waitHost = taskHost.wait or wait
+if type(spawnHost)~="function" or type(waitHost)~="function" then
+    startupFailure("Entorno incompatible: falta spawn/wait")
+    return nil
+end
+local clock = (os and os.clock) or tick
+if type(clock)~="function" then startupFailure("Falta un reloj compatible"); return nil end
+local unpackf = table.unpack or unpack
+local runtimeAlive = true
+local function background(fn)
+    spawnHost(function()
+        waitHost() -- Matcha spawn begins immediately; yield before optional work.
+        if runtimeAlive then fn() end
+    end)
+end
+local function report(message)
+    local out = warn or print
+    if type(out) == "function" then pcall(out, "[Astra] " .. tostring(message)) end
+end
+local RunService, Players, UserInputService = service("RunService"), service("Players"), service("UserInputService")
+local lp, mouse = safeGet(Players, "LocalPlayer"), nil
+local viewport = Vector2.new(1280, 720)
+local camera = setmetatable({}, { __index = function(_, key) if key == "ViewportSize" then return viewport end end })
+local function refreshRuntime()
+    lp = safeGet(Players, "LocalPlayer") or lp
+    if not mouse and lp then pcall(function() mouse = lp:GetMouse() end) end
+    local current = safeGet(workspace, "CurrentCamera")
+    local size = safeGet(current, "ViewportSize") or safeGet(Drawing, "Viewport")
+    if size and size.X and size.Y and size.X > 0 and size.Y > 0 then viewport = size end
+end
+refreshRuntime()
+local function connectOptional(signal, callback)
+    if not signal or type(safeGet(signal, "Connect")) ~= "function" then return nil end
+    local ok, connection = pcall(function() return signal:Connect(callback) end)
+    return ok and connection or nil
+end
+local function connectFrame(callback)
+    for _, name in ipairs({ "RenderStepped", "Heartbeat" }) do
+        local connection = connectOptional(safeGet(RunService, name), callback)
+        if connection then return connection end
+    end
+    local active = true
+    background(function()
+        local last = clock()
+        while active and runtimeAlive do
+            local now = clock()
+            callback(math.max(0.001, now - last))
+            last = now
+            waitHost()
+        end
+    end)
+    return { Disconnect = function() active = false end }
+end
+local function finite(value, fallback)
+    local n = tonumber(value)
+    if not n or n ~= n or n == math.huge or n == -math.huge then return fallback end
+    return n
+end
+local function normalizeKey(value)
+    if type(value) == "number" then return math.max(0, math.min(255, math.floor(finite(value, 0)))) end
+    local name = type(value) == "string" and value or safeGet(value, "Name")
+    if not name then return 0 end
+    name = string.lower(name)
+    local map = { none=0, space=32, tab=9, enter=13, ["return"]=13, backspace=8,
+        esc=27, escape=27, shift=16, leftshift=16, rightshift=16, ctrl=17, leftcontrol=17,
+        rightcontrol=17, alt=18, leftalt=18, rightalt=18, pageup=33, pagedown=34,
+        left=37, up=38, right=39, down=40, insert=45, delete=46,
+        zero=48, one=49, two=50, three=51, four=52, five=53, six=54, seven=55, eight=56, nine=57,
+        m1=1, mousebutton1=1, m2=2, mousebutton2=2, mousebutton3=4 }
+    if map[name] then return map[name] end
+    if #name == 1 then return string.byte(string.upper(name)) end
+    local f = tonumber(name:match("^f(%d+)$"))
+    if f and f >= 1 and f <= 12 then return 111 + f end
+    return 0
+end
+local function colorValid(value)
+    return value and finite(safeGet(value, "R")) ~= nil and finite(safeGet(value, "G")) ~= nil and finite(safeGet(value, "B")) ~= nil
+end
+local function utf8Prefix(text, length)
+    length = math.max(0, math.min(#text, length))
+    if length < #text then
+        local nextByte = string.byte(text, length + 1)
+        while length > 0 and nextByte and nextByte >= 128 and nextByte < 192 do
+            length = length - 1
+            nextByte = string.byte(text, length + 1)
+        end
+    end
+    return string.sub(text, 1, length)
+end
+
+if type(_G.__AstraCleanup) == "function" then pcall(_G.__AstraCleanup) end
+
+local function probe(kind, prop, val)
+	local d
+	local ok = pcall(function() d = Drawing.new(kind); d[prop] = val end)
+	if d then pcall(function() d:Remove() end) end
+	return ok
+end
+local HAS_T = probe("Square", "Transparency", 0.5)
+local HAS_CORNER = probe("Square", "Corner", 5)
+local HAS_FONTSIZE = probe("Text", "FontSize", 14)
+local HAS_BOUNDS = false
+do
+	local d
+	local ok, bounds = pcall(function()
+		d = Drawing.new("Text"); d.Text = "abcdef"
+		if HAS_FONTSIZE then d.FontSize = 13 else d.Size = 13 end
+		return d.TextBounds
+	end)
+	HAS_BOUNDS = ok and bounds ~= nil and finite(safeGet(bounds, "X"), 0) > 5
+	if d then pcall(function() d:Remove() end) end
+end
+
+local FONTS = (typeOf(Drawing.Fonts) == "table") and Drawing.Fonts or {}
+local F_UI = FONTS.System or FONTS.UI or 0
+local F_BOLD = FONTS.SystemBold or FONTS.Plex or 2
+local F_MONO = FONTS.Monospace or 3
+
+local bobData = nil
+
+local function fetchImage(src)
+	if not src or src == "" then return nil end
+	local raw
+	if typeOf(readfile) == "function" then
+		local ok, d = pcall(readfile, src)
+		if ok and type(d) == "string" and #d > 200 then raw = d end
+	end
+	if not raw and string.sub(src, 1, 4) == "http" then
+		if typeOf(httpget) == "function" then pcall(function() raw = httpget(src) end) end
+		if not raw then pcall(function() raw = game:HttpGet(src) end) end
+	end
+	if type(raw) == "string" and #raw > 200 then return raw end
+	return nil
+end
+
+local function loadBob() return nil end
+-- Launcher images are loaded only when the minimized launcher is shown.
+
+local function clamp(v, a, b)
+	if v < a then return a elseif v > b then return b end
+	return v
+end
+local function lerp(a, b, t) return a + (b - a) * t end
+local function approach(a, b, s)
+	if a < b then return math.min(a + s, b) end
+	return math.max(a - s, b)
+end
+local function easeOut(t)
+	t = 1 - clamp(t, 0, 1)
+	return 1 - t * t * t
+end
+local function easeBack(t)
+	t = clamp(t, 0, 1) - 1
+	local c = 1.70158
+	return 1 + (c + 1) * t * t * t + c * t * t
+end
+local function mixC(a, b, t)
+	if t <= 0 then return a elseif t >= 1 then return b end
+	return Color3.fromRGB(
+		math.floor((a.R + (b.R - a.R) * t) * 255 + 0.5),
+		math.floor((a.G + (b.G - a.G) * t) * 255 + 0.5),
+		math.floor((a.B + (b.B - a.B) * t) * 255 + 0.5)
+	)
+end
+local function colorEq(a, b)
+	return math.abs(a.R - b.R) < 0.01 and math.abs(a.G - b.G) < 0.01 and math.abs(a.B - b.B) < 0.01
+end
+local function toHex(c)
+	return string.format("#%02X%02X%02X", math.floor(c.R * 255 + 0.5), math.floor(c.G * 255 + 0.5), math.floor(c.B * 255 + 0.5))
+end
+local function inRect(px, py, x, y, w, h)
+	return px >= x and px <= x + w and py >= y and py <= y + h
+end
+local function V(x, y) return Vector2.new(x, y) end
+local function fmtNum(v, step)
+	if step and step % 1 ~= 0 then
+		return string.format((step < 0.1) and "%.2f" or "%.1f", v)
+	end
+	return tostring(math.floor(v + 0.5))
+end
+local function wrapText(str, maxChars)
+	local lines, cur = {}, ""
+	for word in string.gmatch(str, "%S+") do
+		if cur == "" then
+			cur = word
+		elseif #cur + 1 + #word <= maxChars then
+			cur = cur .. " " .. word
+		else
+			table.insert(lines, cur)
+			cur = word
+		end
+	end
+	if cur ~= "" then table.insert(lines, cur) end
+	if #lines == 0 then lines = { "" } end
+	return table.concat(lines, "\n"), #lines
+end
+local function fire(cb, ...)
+	if type(cb) ~= "function" then return end
+	local args, count = { ... }, select("#", ...)
+	background(function()
+		local ok, err = pcall(cb, unpackf(args, 1, count))
+		if not ok then report("Callback: " .. tostring(err)) end
+	end)
+end
+
+-- Cache host-facing Drawing writes. Animated values are still updated every frame.
+local drawingOpacity, drawingAdapters = 1, {}
+local function newDraw(kind, props)
+	local raw = Drawing.new(kind)
+	assert(raw, "Astra UI: Drawing.new failed for " .. tostring(kind))
+	local cache, removed, measured, unsupported = {}, false, nil, {}
+	local proxy = {}
+	setmetatable(proxy, {
+		__index = function(_, key)
+			if key == "Remove" then
+				return function()
+					if not removed then raw:Remove(); removed = true end
+				end
+			end
+			if key == "TextBounds" then
+				if not measured then measured = safeGet(raw, "TextBounds") end
+				return measured
+			end
+			if cache[key] ~= nil then return cache[key] end
+			return raw[key]
+		end,
+		__newindex = function(_, key, value)
+			if removed then return end
+			local old = cache[key]
+			if old == value then return end
+			if old ~= nil and value ~= nil then
+				if key == "Position" or key == "Size" or key == "From" or key == "To" then
+					if type(value) ~= "number" and old.X == value.X and old.Y == value.Y then return end
+				elseif key == "Color" or key == "OutlineColor" then
+					if old.R == value.R and old.G == value.G and old.B == value.B then return end
+				end
+			end
+			local target = key
+			if kind == "Text" and key == "Size" and HAS_FONTSIZE then target = "FontSize" end
+			if kind == "Square" and key == "Rounding" and HAS_CORNER then target = "Corner" end
+			if unsupported[target] then return end
+			local hostValue = key == "Transparency" and value * drawingOpacity or value
+			local ok = pcall(function() raw[target] = hostValue end)
+			if not ok then unsupported[target] = true; return end
+			cache[key] = value
+			if key == "Text" or key == "Size" or key == "Font" then measured = nil end
+		end,
+	})
+	for k, v in pairs(props or {}) do pcall(function() proxy[k] = v end) end
+	if HAS_T and cache.Transparency == nil then proxy.Transparency = 1 end
+    drawingAdapters[#drawingAdapters + 1] = function()
+        if not removed and HAS_T then pcall(function() raw.Transparency = (cache.Transparency or 1) * drawingOpacity end) end
+    end
+	return proxy
+end
+local function kill(d)
+	pcall(function()
+		d.Visible = false
+		d:Remove()
+	end)
+end
+local function textW(d, size, mono)
+	if HAS_BOUNDS then
+		local b = d.TextBounds
+		if b and b.X > 1 then return b.X end
+	end
+	return #d.Text * (size or 13) * (mono and 0.6 or 0.54)
+end
+
+local Themes = {
+	Cosmos = {
+		Name = "Cosmos",
+		Bg = Color3.fromRGB(8, 9, 20), BgAlt = Color3.fromRGB(13, 15, 31), Panel = Color3.fromRGB(11, 13, 27),
+		Surface = Color3.fromRGB(19, 22, 42), SurfaceHov = Color3.fromRGB(27, 32, 60), SurfaceAct = Color3.fromRGB(36, 43, 80),
+		Border = Color3.fromRGB(38, 45, 80), BorderLit = Color3.fromRGB(72, 92, 150),
+		Accent = Color3.fromRGB(92, 214, 255), AccentDim = Color3.fromRGB(40, 118, 168), AccentGlow = Color3.fromRGB(176, 240, 255),
+		Neb = Color3.fromRGB(96, 72, 205), Neb2 = Color3.fromRGB(38, 140, 200),
+		Text = Color3.fromRGB(255, 255, 255), TextSub = Color3.fromRGB(200, 214, 236), TextDim = Color3.fromRGB(122, 136, 168),
+		Error = Color3.fromRGB(255, 92, 104), Warn = Color3.fromRGB(255, 200, 82), Ok = Color3.fromRGB(92, 240, 162),
+	},
+	Nebula = {
+		Name = "Nebula",
+		Bg = Color3.fromRGB(12, 9, 22), BgAlt = Color3.fromRGB(19, 15, 35), Panel = Color3.fromRGB(16, 12, 30),
+		Surface = Color3.fromRGB(27, 22, 50), SurfaceHov = Color3.fromRGB(40, 32, 72), SurfaceAct = Color3.fromRGB(54, 43, 95),
+		Border = Color3.fromRGB(56, 45, 98), BorderLit = Color3.fromRGB(112, 86, 182),
+		Accent = Color3.fromRGB(204, 136, 255), AccentDim = Color3.fromRGB(120, 66, 190), AccentGlow = Color3.fromRGB(232, 196, 255),
+		Neb = Color3.fromRGB(176, 62, 200), Neb2 = Color3.fromRGB(72, 62, 194),
+		Text = Color3.fromRGB(255, 255, 255), TextSub = Color3.fromRGB(216, 206, 238), TextDim = Color3.fromRGB(142, 128, 172),
+		Error = Color3.fromRGB(255, 92, 110), Warn = Color3.fromRGB(255, 202, 84), Ok = Color3.fromRGB(110, 236, 170),
+	},
+	Supernova = {
+		Name = "Supernova",
+		Bg = Color3.fromRGB(15, 10, 10), BgAlt = Color3.fromRGB(25, 16, 15), Panel = Color3.fromRGB(21, 13, 12),
+		Surface = Color3.fromRGB(36, 23, 21), SurfaceHov = Color3.fromRGB(54, 34, 29), SurfaceAct = Color3.fromRGB(72, 45, 37),
+		Border = Color3.fromRGB(78, 46, 38), BorderLit = Color3.fromRGB(150, 86, 60),
+		Accent = Color3.fromRGB(255, 168, 72), AccentDim = Color3.fromRGB(180, 100, 40), AccentGlow = Color3.fromRGB(255, 218, 146),
+		Neb = Color3.fromRGB(220, 82, 52), Neb2 = Color3.fromRGB(200, 140, 40),
+		Text = Color3.fromRGB(255, 255, 255), TextSub = Color3.fromRGB(238, 218, 206), TextDim = Color3.fromRGB(172, 146, 134),
+		Error = Color3.fromRGB(255, 84, 84), Warn = Color3.fromRGB(255, 206, 80), Ok = Color3.fromRGB(150, 236, 120),
+	},
+	Aurora = {
+		Name = "Aurora",
+		Bg = Color3.fromRGB(8, 15, 15), BgAlt = Color3.fromRGB(13, 24, 22), Panel = Color3.fromRGB(11, 20, 19),
+		Surface = Color3.fromRGB(20, 34, 31), SurfaceHov = Color3.fromRGB(29, 49, 43), SurfaceAct = Color3.fromRGB(40, 65, 56),
+		Border = Color3.fromRGB(44, 72, 62), BorderLit = Color3.fromRGB(86, 140, 112),
+		Accent = Color3.fromRGB(84, 245, 178), AccentDim = Color3.fromRGB(40, 150, 100), AccentGlow = Color3.fromRGB(166, 255, 218),
+		Neb = Color3.fromRGB(40, 190, 150), Neb2 = Color3.fromRGB(60, 120, 200),
+		Text = Color3.fromRGB(255, 255, 255), TextSub = Color3.fromRGB(206, 230, 220), TextDim = Color3.fromRGB(128, 164, 152),
+		Error = Color3.fromRGB(255, 90, 86), Warn = Color3.fromRGB(255, 212, 70), Ok = Color3.fromRGB(110, 255, 180),
+	},
+}
+
+local VK_NAMES = {
+	[0x01] = "M1", [0x02] = "M2", [0x04] = "M3", [0x05] = "M4", [0x06] = "M5",
+	[0x08] = "Back", [0x09] = "Tab", [0x0D] = "Enter", [0x10] = "Shift", [0x11] = "Ctrl", [0x12] = "Alt",
+	[0x14] = "Caps", [0x1B] = "Esc", [0x20] = "Space", [0x21] = "PgUp", [0x22] = "PgDn", [0x23] = "End", [0x24] = "Home",
+	[0x25] = "Left", [0x26] = "Up", [0x27] = "Right", [0x28] = "Down", [0x2D] = "Ins", [0x2E] = "Del",
+	[0xA0] = "LShift", [0xA1] = "RShift", [0xA2] = "LCtrl", [0xA3] = "RCtrl", [0xA4] = "LAlt", [0xA5] = "RAlt",
+}
+for i = 0x41, 0x5A do VK_NAMES[i] = string.char(i) end
+for i = 0x30, 0x39 do VK_NAMES[i] = string.char(i) end
+for i = 1, 12 do VK_NAMES[0x6F + i] = "F" .. i end
+local function getKeyName(vk)
+	if not vk or vk == 0 then return "none" end
+	return VK_NAMES[vk] or string.format("0x%X", vk)
+end
+
+-- Layout is implemented locally; no external library or game functions are emulated.
+local STYLE_LIMITS = {
+    Width={0.1,1}, Height={24,240}, TextSize={10,22}, Gap={0,24},
+    Corner={0,20}, Border={0,4}, Cooldown={0.1,2},
+}
+local function styleTable(value)
+    if value == "Compact" then return {Height=36, TextSize=13, Gap=4} end
+    if value == nil or value == "Default" then return {} end
+    if type(value) ~= "table" then return {} end
+    local result = {}
+    for key,limits in pairs(STYLE_LIMITS) do
+        local n = finite(value[key])
+        if n then result[key] = math.max(limits[1], math.min(limits[2], n)) end
+    end
+    return result
+end
+local function acceptAction(el, now, cooldown)
+    if el.lastActionAt and now - el.lastActionAt < cooldown then return false end
+    el.lastActionAt = now
+    return true
+end
+local function sameValue(a,b)
+    if type(a) ~= "table" or type(b) ~= "table" then return a == b end
+    for k,v in pairs(a) do if b[k] ~= v then return false end end
+    for k,v in pairs(b) do if a[k] ~= v then return false end end
+    return true
+end
+
+local Kirin = { Version = "4.0.0", Flags = {}, _controls = {}, _watchers = {}, _alive = true, _windows = {}, _theme = Themes.Cosmos }
+
+function Kirin:Set(flag, value, silent)
+	local control = self._controls[flag]
+	if control and not control.setting and not control.destroyed and control.handle.Set then
+		local current = control.handle.Get and control.handle:Get()
+		if not sameValue(current, value) then control.handle:Set(value, silent); return end
+	end
+	self.Flags[flag] = value
+	local cbs = self._watchers[flag]
+	if cbs and not silent and not (control and control.silent) then
+		for _, entry in ipairs(cbs) do if entry.live then fire(function() if entry.live then entry.callback(value) end end) end end
+	end
+end
+function Kirin:GetCapabilities()
+    return {
+        Drawing = Drawing ~= nil and type(safeGet(Drawing, "new")) == "function",
+        Scheduler = type(spawnHost) == "function" and type(waitHost) == "function",
+        KeyPolling = type(iskeypressed) == "function",
+        MousePolling = type(ismouse1pressed) == "function" or type(iskeypressed) == "function",
+        FileRead = type(readfile) == "function", FileWrite = type(writefile) == "function",
+        Touch = type(firetouchinterest) == "function",
+        ProximityPrompt = type(fireproximityprompt) == "function",
+    }
+end
+function Kirin:SetLayout(value)
+    self._layout = styleTable(value)
+    for _,window in ipairs(self._windows) do window:SetLayout(self._layout) end
+    return self
+end
+function Kirin:AddTab(options)
+    if not self._defaultWindow or not self._defaultWindow:IsAlive() then
+        self._defaultWindow = self:CreateWindow({Title="ASTRA", Layout=self._layout})
+    end
+    return self._defaultWindow:AddTab(options)
+end
+function Kirin:Get(flag) return self.Flags[flag] end
+function Kirin:Watch(flag, cb)
+	assert(type(cb) == "function", "Astra UI: Watch needs a function")
+	local list = self._watchers[flag] or {}
+	self._watchers[flag] = list
+	local entry = { callback = cb, live = true }
+	list[#list + 1] = entry
+	return { Disconnect = function() entry.live = false end }
+end
+function Kirin:ExportConfig()
+    local result={Version=1,Values={}}
+    for flag,el in pairs(self._controls) do
+        if not el.destroyed and el.handle.Get then
+            local value=el.handle:Get()
+            if el.type=="colorpicker" then value={R=value.R,G=value.G,B=value.B} end
+            result.Values[flag]={Type=el.type,Value=value}
+        end
+    end
+    local http=service("HttpService")
+    local ok,json=pcall(function() return http:JSONEncode(result) end)
+    if not ok then return nil,"JSONEncode no disponible" end
+    return json
+end
+function Kirin:ImportConfig(json, silent)
+    local http=service("HttpService")
+    local ok,data=pcall(function() return http:JSONDecode(json) end)
+    if not ok or type(data)~="table" or data.Version~=1 or type(data.Values)~="table" then
+        return false,"Configuracion JSON invalida o version no compatible"
+    end
+    local applied=0
+    for flag,entry in pairs(data.Values) do
+        local el=self._controls[flag]
+        if el and not el.destroyed and type(entry)=="table" and entry.Type==el.type and el.handle.Set then
+            local value=entry.Value
+            if el.type=="colorpicker" and type(value)=="table" and colorValid(value) then value=Color3.new(value.R,value.G,value.B) end
+            local accepted=pcall(function() el.handle:Set(value,silent~=false) end)
+            if accepted then applied=applied+1 end
+        end
+    end
+    return true,applied
+end
+function Kirin:SaveConfig(path)
+    if type(writefile)~="function" then return false,"writefile no disponible" end
+    local json,err=self:ExportConfig()
+    if not json then return false,err end
+    return pcall(writefile,path,json)
+end
+function Kirin:LoadConfig(path,silent)
+    if type(readfile)~="function" then return false,"readfile no disponible" end
+    local ok,json=pcall(readfile,path)
+    if not ok then return false,tostring(json) end
+    return self:ImportConfig(json,silent)
+end
+function Kirin:GetThemes() return { "Cosmos", "Nebula", "Supernova", "Aurora" } end
+function Kirin:SetTransparency(value)
+    drawingOpacity = 1 - clamp(finite(value, 0), 0, 0.6)
+    for _, update in ipairs(drawingAdapters) do update() end
+end
+function Kirin:Unload() self:Destroy() end
+function Kirin:SetTheme(name)
+	local t = Themes[name]
+	if not t then return end
+	self._theme = t
+	for _, w in ipairs(self._windows) do
+		if w._applyTheme then w:_applyTheme(t) end
+	end
+end
+
+local notifs = {}
+local notifConn = nil
+local NW = 292
+
+local function notifStep(dt)
+	local vp = camera.ViewportSize
+	local T = Kirin._theme
+	local now = clock()
+	local ty = 22
+	local i = 1
+	while i <= #notifs do
+		local n = notifs[i]
+		local age = now - n.t0
+		local inT = clamp(age / 0.38, 0, 1)
+		local outT = clamp((age - n.dur) / 0.32, 0, 1)
+		if outT >= 1 then
+			for _, d in pairs(n.d) do kill(d) end
+			table.remove(notifs, i)
+		else
+			local slide = easeBack(inT) * (1 - easeOut(outT))
+			n.y = n.y and lerp(n.y, ty, math.min(dt * 12, 1)) or ty
+			local x = vp.X + 12 - (NW + 30) * slide
+			local y = n.y
+			local col = (n.kind == "success" and T.Ok) or (n.kind == "warning" and T.Warn) or (n.kind == "error" and T.Error) or T.Accent
+			local d = n.d
+			d.bg.Position = V(x, y); d.bg.Size = V(NW, n.h); d.bg.Color = T.BgAlt
+			d.ol.Position = V(x, y); d.ol.Size = V(NW, n.h); d.ol.Color = mixC(T.Border, col, 0.45)
+			d.bar.Position = V(x, y + 8); d.bar.Size = V(3, n.h - 16); d.bar.Color = col
+			d.title.Position = V(x + 14, y + 9); d.title.Color = T.Text
+			d.tag.Position = V(x + NW - 12 - textW(d.tag, 10, true), y + 11); d.tag.Color = col
+			local chars = math.floor(math.max(0, age - 0.18) * 75)
+			d.body.Text = string.sub(n.full, 1, chars)
+			d.body.Position = V(x + 14, y + 28); d.body.Color = T.TextSub
+			local life = 1 - clamp(age / n.dur, 0, 1)
+			d.track.Position = V(x + 14, y + n.h - 7); d.track.Size = V(NW - 28, 2); d.track.Color = T.Border
+			d.fill.Position = V(x + 14, y + n.h - 7); d.fill.Size = V((NW - 28) * life, 2); d.fill.Color = col
+			local a = (1 - outT) * math.min(1, inT * 2.5)
+			for _, dd in pairs(n.d) do
+				dd.Visible = slide > 0.01
+				if HAS_T then dd.Transparency = a end
+			end
+			ty = ty + n.h + 8
+			i = i + 1
+		end
+	end
+end
+
+function Kirin:Notify(cfg)
+	cfg = cfg or {}
+	local kind = cfg.Type or "info"
+	local body, lines = wrapText(tostring(cfg.Content or ""), 40)
+	local tag = (kind == "success" and "[ OK ]") or (kind == "warning" and "[ WARN ]") or (kind == "error" and "[ ERR ]") or "[ INFO ]"
+	local n = {
+		t0 = clock(), dur = math.max(0.25, finite(cfg.Duration, 4)), kind = kind, full = body, h = 42 + lines * 14,
+		d = {
+			bg = newDraw("Square", { Filled = true, Rounding = 6 }),
+			ol = newDraw("Square", { Filled = false, Thickness = 1, Rounding = 6 }),
+			bar = newDraw("Square", { Filled = true, Rounding = 1 }),
+			title = newDraw("Text", { Text = tostring(cfg.Title or "Notice"), Size = 13, Font = F_BOLD, Outline = true }),
+			tag = newDraw("Text", { Text = tag, Size = 10, Font = F_MONO, Outline = true }),
+			body = newDraw("Text", { Text = "", Size = 12, Font = F_UI, Outline = true }),
+			track = newDraw("Square", { Filled = true }),
+			fill = newDraw("Square", { Filled = true }),
+		},
+	}
+	table.insert(notifs, n)
+	if not notifConn then
+		notifConn = connectFrame(function(dt)
+			if not Kirin._alive or #notifs == 0 then
+				local old = notifConn
+				notifConn = nil
+				if old then pcall(function() old:Disconnect() end) end
+				return
+			end
+			pcall(notifStep, math.min(dt or 0.016, 0.05))
+		end)
+	end
+end
+
+function Kirin:CreateWindow(cfg)
+	assert(self._alive, "Astra UI: reload the library after Destroy")
+	refreshRuntime()
+	cfg = cfg or {}
+	local title = cfg.Title or "ASTRA"
+    local layout = styleTable(cfg.Layout or self._layout)
+    local function styleValue(el, key, fallback)
+        if el.style and el.style[key] ~= nil then return el.style[key] end
+        if el.tab.style and el.tab.style[key] ~= nil then return el.tab.style[key] end
+        if layout[key] ~= nil then return layout[key] end
+        return fallback
+    end
+    local function baseHeight(el)
+        local minimum = ({toggle=32,button=32,keybind=36,slider=60,dropdown=62,
+            colorpicker=44,input=76,progressbar=54})[el.type]
+        if not minimum then return el.height end
+        return math.max(minimum, styleValue(el,"Height",el.baseHeight))
+    end
+    local function elementHeight(el)
+        el.height = baseHeight(el)
+        if el.type == "dropdown" then return el.height + math.floor((#el.options*32+6)*el.o+0.5) + (el.o>0.01 and 4 or 0) end
+        if el.type == "colorpicker" then return el.height + math.floor(34*el.o+0.5) end
+        return el.height
+    end
+    local function measureTab(tab,width)
+        local items, x, y, rowH = {}, 0, 0, 0
+        local gap = tab and (tab.style.Gap or layout.Gap or 6) or 6
+        if not tab then return items,0 end
+        for _,el in ipairs(tab.elems) do
+            if not el.destroyed and el.visible ~= false then
+                local full = el.type=="header" or el.type=="paragraph" or el.type=="divider" or el.type=="space"
+                local fraction = full and 1 or styleValue(el,"Width",1/tab.columns)
+                local ew = fraction>=1 and width or math.max(200, (width+gap)*fraction-gap)
+                ew = math.min(width,ew)
+                if x>0 and x+ew>width+0.01 then y=y+rowH+gap; x=0; rowH=0 end
+                if el.type=="paragraph" then
+                    local text,lines=wrapText(el.fullTitle or el.d.txt.Text,math.max(8,math.floor((ew-12)/6.4)))
+                    el.d.txt.Text=text; el.height=lines*15+8
+                end
+                local eh = elementHeight(el)
+                items[#items+1] = {el=el,x=x,y=y,w=ew,h=eh}
+                x=x+ew+gap
+                rowH=math.max(rowH,eh)
+            end
+        end
+        return items,y+rowH
+    end
+	local author = cfg.Author or "orbit build"
+	local T = Themes[cfg.Theme or "Cosmos"] or Themes.Cosmos
+	Kirin._theme = T
+	local togKey = normalizeKey(cfg.ToggleKey or 0x79)
+	local normalW = clamp(finite(cfg.Size and cfg.Size[1], 620), 520, 920)
+	local normalH = clamp(finite(cfg.Size and cfg.Size[2], 470), 390, 720)
+	local MIN_W, MIN_H, MAX_W, MAX_H = 520, 390, 920, 720
+	local TITLE_H, SIDE_W, FOOT_H, HEAD_H = 42, 152, 26, 40
+	local W, H, tW, tH = normalW, normalH, normalW, normalH
+	local vp0 = camera.ViewportSize
+	local winX = math.floor((vp0.X - W) / 2)
+	local winY = math.floor((vp0.Y - H) / 2)
+
+	local visible, minimized, expanded = true, false, false
+	local windowAlive = true
+	local appear, miniAppear, lastAlpha = 0, 0, -1
+	local hiddenFlag = true
+	local dragging, dragDX, dragDY = false, 0, 0
+	local resizing, resDX, resDY = false, 0, 0
+	local scrollY, scrollTarget, maxScroll, scrollFlash = 0, 0, 0, 0
+	local scrollDragging, scrollGrab = false, 0
+	local cRect = { 0, 0, 0, 0 }
+	local miniX, miniY = 80, 130
+	local miniDrag, miniDX, miniDY, miniSX, miniSY = false, 0, 0, 0, 0
+	local miniHover, miniImgSet = 0, false
+	local iconData = nil
+	local prevDown = false
+	local startT = clock()
+	local glitchAt, glitchUntil = clock() + 6, 0
+	local frames, fps, fpsT = 0, 60, clock()
+	local signal, signalT = 4, 0
+	local contentSlide, typeT, typeStart = 1, 0, clock()
+	local gliderY = nil
+	local btnHover = 0
+	local activeInput, activeCaptor = nil, nil
+	local keyPrev = {}
+	local lastToggle = 0
+	local errShown = false
+	local conns, watermarks = {}, {}
+
+	local winList, miniList, registry = {}, {}, {}
+	local function wd(kind, props, base)
+		props = props or {}
+		if props.Visible == nil then props.Visible = false end
+		local d = newDraw(kind, props)
+		table.insert(winList, d)
+		if base ~= false then table.insert(registry, { d = d, a = base or 1 }) end
+		return d
+	end
+	local function md(kind, props)
+		props = props or {}
+		if props.Visible == nil then props.Visible = false end
+		local d = newDraw(kind, props)
+		table.insert(miniList, d)
+		return d
+	end
+	local function setA(d, a)
+		if HAS_T then d.Transparency = a end
+	end
+
+	local shadows = {}
+	if HAS_T then
+		shadows[1] = wd("Square", { Filled = true, Color = Color3.fromRGB(0, 0, 0), Rounding = 16 }, 0.16)
+		shadows[2] = wd("Square", { Filled = true, Color = Color3.fromRGB(0, 0, 0), Rounding = 13 }, 0.3)
+	else
+		shadows[1] = wd("Square", { Filled = true, Color = Color3.fromRGB(2, 2, 5), Rounding = 11 })
+	end
+	local winBg = wd("Square", { Filled = true, Rounding = 10 })
+
+	local NEB = { { rx = 0.74, ry = 0.36, ph = 0.0, key = "Neb" }, { rx = 0.40, ry = 0.78, ph = 2.1, key = "Neb2" } }
+	local NEB_R = { 76, 56, 37, 20 }
+	local NEB_K = { 0.05, 0.09, 0.14, 0.2 }
+	local nebula = {}
+	for ci = 1, #NEB do
+		for ri = 1, 4 do
+			table.insert(nebula, { c = ci, r = ri, d = wd("Circle", { Filled = true, NumSides = 40 }) })
+		end
+	end
+
+	local STAR_TINT = { Color3.fromRGB(255, 255, 255), Color3.fromRGB(185, 212, 255), Color3.fromRGB(255, 224, 196) }
+	local stars = {}
+	for i = 1, 30 do
+		local depth = (i % 3 == 0) and 1 or ((i % 3 == 1) and 0.55 or 0.25)
+		local s = {
+			u = math.random(), v = math.random(), depth = depth,
+			sp = 4 + math.random() * 7, tw = 1.2 + math.random() * 3, ph = math.random() * 6.28,
+			tint = math.random(1, 3),
+			d = wd("Circle", { Filled = true, NumSides = 8 }, false),
+		}
+		if i <= 4 then
+			s.depth = 1
+			s.g1 = wd("Line", { Thickness = 1 }, false)
+			s.g2 = wd("Line", { Thickness = 1 }, false)
+		end
+		table.insert(stars, s)
+	end
+	local shoot = { active = false, segs = {}, nextAt = clock() + 3 }
+	for k = 1, 7 do shoot.segs[k] = wd("Line", { Thickness = (k <= 2) and 2 or 1 }, false) end
+
+	    -- Celestial garden: fixed Drawing pool behind the existing controls.
+    local gardenEnabled = cfg.VisualFX ~= false
+    local gardenDraws, gardenNodes, gardenLinks, gardenOrbit, gardenCluster, gardenDust = {}, {}, {}, {}, {}, {}
+    local gardenAt, gardenDirty = -1, true
+    local gardenX, gardenY, gardenW, gardenH, gardenAlpha
+    local function gd(kind, props)
+        local d = wd(kind, props, false)
+        gardenDraws[#gardenDraws + 1] = d
+        return d
+    end
+    local gardenSeeds = { {0.56,0.20}, {0.69,0.12}, {0.84,0.23}, {0.77,0.39}, {0.62,0.44}, {0.48,0.31} }
+    for i = 1, 6 do gardenNodes[i] = gd("Circle", {Filled=true, Radius=1.5, NumSides=10}) end
+    for i = 1, 6 do gardenLinks[i] = gd("Line", {Thickness=1}) end
+    for i = 1, 20 do gardenOrbit[i] = gd("Line", {Thickness=1}) end
+    local gardenPlanet = gd("Circle", {Filled=true, NumSides=32})
+    local gardenShade = gd("Circle", {Filled=true, NumSides=32})
+    local gardenMoon = gd("Circle", {Filled=true, Radius=2, NumSides=12})
+    for i = 1, 7 do
+        gardenCluster[i] = {core=gd("Circle", {Filled=true, Radius=1.2, NumSides=10}), a=gd("Line", {Thickness=1}), b=gd("Line", {Thickness=1})}
+    end
+    for i = 1, 8 do gardenDust[i] = gd("Circle", {Filled=true, Radius=1, NumSides=8}) end
+    local function paintGarden(now, x, y, w, h, alpha)
+        if not gardenEnabled then return end
+        local moved = x ~= gardenX or y ~= gardenY or w ~= gardenW or h ~= gardenH or math.abs(alpha - (gardenAlpha or -1)) > 0.02
+        if not gardenDirty and not moved and now < gardenAt then return end
+        gardenAt, gardenDirty = now + 1/30, false
+        gardenX, gardenY, gardenW, gardenH, gardenAlpha = x, y, w, h, alpha
+        local points = {}
+        for i, seed in ipairs(gardenSeeds) do
+            local px = x + 8 + seed[1] * (w - 16) + math.sin(now * 0.16 + i) * 3
+            local py = y + 8 + seed[2] * (h - 16) + math.cos(now * 0.13 + i) * 3
+            points[i] = V(px, py)
+            local d = gardenNodes[i]
+            d.Position = points[i]; d.Color = mixC(T.Bg, T.AccentGlow, 0.42 + math.sin(now * 1.3 + i) * 0.12)
+            d.Visible = true; setA(d, alpha * 0.65)
+        end
+        for i, d in ipairs(gardenLinks) do
+            d.From = points[i]; d.To = points[i % 6 + 1]
+            d.Color = mixC(T.Bg, T.Accent, 0.28); d.Visible = true; setA(d, alpha * 0.4)
+        end
+        -- A small ringed world drifts above the footer, well inside the panel.
+        local pcx, pcy = x + w * 0.78, y + h * 0.78
+        local radius = math.min(28, h * 0.09)
+        gardenPlanet.Position = V(pcx, pcy); gardenPlanet.Radius = radius
+        gardenPlanet.Color = mixC(T.Bg, T.Neb, 0.28); gardenPlanet.Visible = true; setA(gardenPlanet, alpha * 0.7)
+        gardenShade.Position = V(pcx + radius * 0.35, pcy - radius * 0.2); gardenShade.Radius = radius * 0.7
+        gardenShade.Color = T.BgAlt; gardenShade.Visible = true; setA(gardenShade, alpha * 0.8)
+        local tilt = -0.35 + math.sin(now * 0.12) * 0.06
+        local ct, st = math.cos(tilt), math.sin(tilt)
+        local function orbitPoint(a)
+            local ox, oy = math.cos(a) * radius * 1.9, math.sin(a) * radius * 0.6
+            return V(pcx + ox * ct - oy * st, pcy + ox * st + oy * ct)
+        end
+        for i, d in ipairs(gardenOrbit) do
+            d.From = orbitPoint((i-1) * math.pi/10); d.To = orbitPoint(i * math.pi/10)
+            d.Color = mixC(T.Bg, T.Accent, 0.3); d.Visible = true; setA(d, alpha * 0.5)
+        end
+        gardenMoon.Position = orbitPoint(now * 0.4); gardenMoon.Color = mixC(T.Bg, T.AccentGlow, 0.7)
+        gardenMoon.Visible = true; setA(gardenMoon, alpha * 0.65)
+        -- A scattered stellar nursery and orbiting fragments replace the botanical silhouette.
+        local clusterX, clusterY = x + w * 0.19, y + h * 0.78
+        local clusterScale = math.min(1, h / 360)
+        for i, star in ipairs(gardenCluster) do
+            local angle = i * 2.399 + now * (i <= 4 and 0.018 or -0.09)
+            local radius = (16 + i * 5) * clusterScale
+            local px = clusterX + math.cos(angle) * radius
+            local py = clusterY + math.sin(angle) * radius * 0.67
+            local pulse = (math.sin(now * 1.1 + i * 1.7) + 1) * 0.5
+            local glint = (1.5 + pulse * pulse * 3) * clusterScale
+            star.core.Position = V(px, py); star.core.Radius = 0.8 + pulse * 0.6
+            star.core.Color = mixC(T.Bg, T.AccentGlow, 0.45 + pulse * 0.35)
+            if i <= 4 then
+                star.a.From = V(px-glint, py); star.a.To = V(px+glint, py)
+                star.b.From = V(px, py-glint); star.b.To = V(px, py+glint)
+            else
+                local spin, size = now * 0.22 + i, 2.5 * clusterScale
+                local dx, dy = math.cos(spin) * size, math.sin(spin) * size
+                star.a.From = V(px-dx, py-dy); star.a.To = V(px-dy, py+dx)
+                star.b.From = V(px-dy, py+dx); star.b.To = V(px+dx, py+dy)
+            end
+            star.core.Visible = true; setA(star.core, alpha * 0.75)
+            for _, d in ipairs({star.a, star.b}) do
+                d.Color = mixC(T.Bg, i <= 4 and T.AccentGlow or T.Neb, 0.3 + pulse * 0.25)
+                d.Visible = true; setA(d, alpha * 0.6)
+            end
+        end
+        for i, d in ipairs(gardenDust) do
+            local phase = (now * (0.018 + i * 0.001) + i * 0.137) % 1
+            d.Position = V(x + 12 + ((i * 0.113 + math.sin(now * 0.18 + i) * 0.03) % 1) * (w - 24), y + 12 + (1-phase) * (h-24))
+            d.Color = mixC(T.Bg, i % 2 == 0 and T.Ok or T.AccentGlow, 0.3 + math.sin(now+i) * 0.12)
+            d.Visible = true; setA(d, alpha * math.sin(phase * math.pi) * 0.6)
+        end
+    end
+
+	local titleBg = wd("Square", { Filled = true, Rounding = 10 })
+	local titleFill = wd("Square", { Filled = true })
+	local topGlass = wd("Line", { Thickness = 1 })
+	local beamGlow = {
+		wd("Line", { Thickness = 10 }, false),
+		wd("Line", { Thickness = 6 }, false),
+		wd("Line", { Thickness = 3 }, false),
+	}
+	local beamSpark = wd("Circle", { Filled = true, Radius = 2, NumSides = 12 }, false)
+	local beamTail = wd("Line", { Thickness = 1 })
+	local beam = wd("Line", { Thickness = 2 })
+	local titleGrad = {}
+	for i = 1, 10 do titleGrad[i] = wd("Line", { Thickness = 1 }) end
+	local sidePanel = wd("Square", { Filled = true })
+	local sideLine = wd("Line", { Thickness = 1 })
+
+	local ringSegs = {}
+	for i = 9, 16 do ringSegs[i] = wd("Line", { Thickness = 1.5 }) end
+	local planet = wd("Circle", { Filled = true, NumSides = 24 })
+	local planetShade = wd("Circle", { Filled = true, NumSides = 24 })
+	local planetSpec = wd("Circle", { Filled = true, NumSides = 10 })
+	for i = 1, 8 do ringSegs[i] = wd("Line", { Thickness = 1.5 }) end
+	local moon = wd("Circle", { Filled = true, NumSides = 10 })
+
+	local ghostA = wd("Text", { Text = title, Size = 15, Font = F_BOLD, Outline = true })
+	local ghostB = wd("Text", { Text = title, Size = 15, Font = F_BOLD, Outline = true })
+	local titleText = wd("Text", { Text = title, Size = 15, Font = F_BOLD, Outline = true })
+	local subText = wd("Text", { Text = author, Size = 10, Font = F_MONO, Outline = true })
+	-- Always-visible vector window controls; existing actions/hit areas are unchanged.
+	local WINDOW_GLYPHS = {
+		close = {{-4,-4,4,4},{4,-4,-4,4}},
+		minimize = {{-4,2,4,2}},
+		expand = {{-4,-4,4,-4},{4,-4,4,4},{4,4,-4,4},{-4,4,-4,-4}},
+		restore = {{-4,-2,2,-2},{2,-2,2,4},{2,4,-4,4},{-4,4,-4,-2},
+			{-1,-4,4,-4},{4,-4,4,1},{4,1,3,1}},
+	}
+	local tBtns = {}
+	for i = 1, 3 do
+		local b = {
+			bg = wd("Square", { Filled = true, Rounding = 5 }),
+			border = wd("Square", { Filled = false, Thickness = 1, Rounding = 5 }),
+			strokes = {},
+		}
+		local count = i == 1 and 2 or (i == 2 and 1 or 7)
+		for j = 1, count do b.strokes[j] = wd("Line", { Thickness = 1.5 }) end
+		tBtns[i] = b
+	end
+
+	local headTitle = wd("Text", { Size = 17, Font = F_BOLD, Outline = true })
+	local headCrumb = wd("Text", { Size = 10, Font = F_MONO, Outline = true })
+	local headLine = wd("Line", { Thickness = 1 })
+	local headAccent = wd("Line", { Thickness = 2 })
+	local scrollTrack = wd("Line", { Thickness = 1 })
+	local scrollThumb = wd("Square", { Filled = true, Rounding = 2 })
+
+	-- Decorative radar removed; sensor controls remain intact.
+
+	local footBg = wd("Square", { Filled = true, Rounding = 10 })
+	local footFill = wd("Square", { Filled = true })
+	local footLine = wd("Line", { Thickness = 1 })
+	local footLeft = wd("Text", { Size = 10, Font = F_MONO, Outline = true })
+	local footRight = wd("Text", { Size = 10, Font = F_MONO, Outline = true })
+	local bars = {}
+	for i = 1, 6 do bars[i] = wd("Square", { Filled = true }) end
+	local grip = {}
+	for i = 0, 2 do
+		for j = 0, 2 - i do
+			table.insert(grip, { i = i, j = j, d = wd("Circle", { Filled = true, NumSides = 6, Radius = 1.2 }) })
+		end
+	end
+	local border = wd("Square", { Filled = false, Thickness = 1, Rounding = 10 })
+	local brackets = {}
+	for i = 1, 8 do brackets[i] = wd("Line", { Thickness = 1.5 }) end
+
+	local mSonar = { md("Circle", { Filled = false, Thickness = 1, NumSides = 40 }), md("Circle", { Filled = false, Thickness = 1, NumSides = 40 }) }
+	local mDisc = md("Circle", { Filled = true, NumSides = 40 })
+	local mImage = md("Image", {})
+	local mInner = md("Circle", { Filled = false, Thickness = 1, NumSides = 40 })
+	local mRing = md("Circle", { Filled = false, Thickness = 2, NumSides = 40 })
+	local mLetter = md("Text", { Text = string.sub(title, 1, 1), Size = 20, Font = F_BOLD, Center = true, Outline = true })
+	local mDots = { md("Circle", { Filled = true, NumSides = 10 }), md("Circle", { Filled = true, NumSides = 10 }) }
+	local mHint = md("Text", { Text = "[ open ]", Size = 10, Font = F_MONO, Center = true, Outline = true })
+
+	local side, tabs = {}, {}
+	local activeTab = nil
+	local glider = nil
+	local function ensureGlider()
+		if glider then return end
+		glider = {
+			bg = wd("Square", { Filled = true, Rounding = 5 }),
+			bar = wd("Square", { Filled = true, Rounding = 1 }),
+		}
+	end
+
+	local POLL = typeOf(iskeypressed) == "function"
+	local TYPE_KEYS = {}
+	for i = 0x41, 0x5A do table.insert(TYPE_KEYS, i) end
+	for i = 0x30, 0x39 do table.insert(TYPE_KEYS, i) end
+	for _, k in ipairs({ 0x20, 0x08, 0x0D, 0x1B, 0xBD, 0xBE, 0xBC, 0xBF, 0xBA }) do table.insert(TYPE_KEYS, k) end
+	local SHIFT_DIGITS = { ["1"] = "!", ["2"] = "@", ["3"] = "#", ["4"] = "$", ["5"] = "%", ["6"] = "^", ["7"] = "&", ["8"] = "*", ["9"] = "(", ["0"] = ")" }
+	local PUNCT = { [0x20] = " ", [0xBD] = "-", [0xBE] = ".", [0xBC] = ",", [0xBF] = "/", [0xBA] = ";" }
+
+	local function keyEdge(vk)
+		local d = iskeypressed(vk) == true
+		local was = keyPrev[vk]
+		keyPrev[vk] = d
+		return d and not was
+	end
+	local function snapshotKeys(from, to)
+		if not POLL then return end
+		for vk = from, to do keyPrev[vk] = iskeypressed(vk) end
+	end
+	local function finishInput()
+		local el = activeInput
+		if not el then return end
+		el.focused = false
+		activeInput = nil
+		if el.flag then Kirin:Set(el.flag, el.text) end
+		fire(el.callback, el.text)
+	end
+	local function typeKey(vk, shift)
+		local el = activeInput
+		if not el then return end
+		if vk == 0x08 then
+			el.text = utf8Prefix(el.text, #el.text - 1)
+		elseif vk == 0x0D or vk == 0x1B then
+			finishInput()
+			return
+		elseif vk >= 0x41 and vk <= 0x5A then
+			local c = string.char(vk)
+			el.text = el.text .. (shift and c or string.lower(c))
+		elseif vk >= 0x30 and vk <= 0x39 then
+			local c = string.char(vk)
+			el.text = el.text .. (shift and (SHIFT_DIGITS[c] or c) or c)
+		elseif PUNCT[vk] then
+			el.text = el.text .. PUNCT[vk]
+		end
+		if #el.text > 64 then el.text = string.sub(el.text, 1, 64) end
+	end
+	local function captureKey(vk)
+		local el = activeCaptor
+		if not el then return end
+		if vk ~= 0x1B then
+			el.key = vk
+			if el.flag then Kirin:Set(el.flag, vk) end
+			fire(el.callback, vk)
+		end
+		el.listening = false
+		activeCaptor = nil
+	end
+	local function startListen(el)
+		finishInput()
+		if activeCaptor and activeCaptor ~= el then activeCaptor.listening = false end
+		el.listening = true
+		el.listenT = clock()
+		activeCaptor = el
+		snapshotKeys(0x02, 0xFE)
+	end
+	local function toggleUI()
+		if clock() - lastToggle < 0.25 then return end
+		lastToggle = clock()
+		if minimized then
+			minimized = false
+			visible = true
+		else
+			visible = not visible
+		end
+	end
+	local function pollKeys(now)
+		if not POLL then return end
+		if type(isrbxactive) == "function" and not isrbxactive() then return end
+		if activeCaptor then
+			if now - (activeCaptor.listenT or 0) > 0.12 then
+				for vk = 0x02, 0xFE do
+					if keyEdge(vk) then
+						captureKey(vk)
+						break
+					end
+				end
+			end
+			return
+		end
+		if activeInput then
+			local shift = iskeypressed(0x10)
+			for _, vk in ipairs(TYPE_KEYS) do
+				if keyEdge(vk) then typeKey(vk, shift) end
+			end
+			return
+		end
+		if keyEdge(togKey) then toggleUI() end
+		for _, tab in ipairs(tabs) do
+			for _, el in ipairs(tab.elems) do
+				if el.type == "keybind" then
+					local down = el.key > 0 and iskeypressed(el.key) == true
+					local hit = down and not el.keyDown
+					el.keyDown = down
+					local value = el.enabled
+					if el.mode == "hold" then value = down elseif el.mode == "always" then value = true
+					elseif hit then value = el.mode == "click" and true or not value
+					elseif el.mode == "click" then value = false end
+					if value ~= el.enabled then el.enabled = value; fire(el.onTriggered, value, el.key) end
+				end
+			end
+		end
+	end
+	local function isDown()
+		if type(isrbxactive) == "function" and not isrbxactive() then return false end
+		if type(ismouse1pressed) == "function" then return ismouse1pressed() == true end
+		if POLL then return iskeypressed(0x01) == true end
+		if typeOf(ismouse1pressed) == "function" then
+			local ok, r = pcall(ismouse1pressed)
+			if ok then return r end
+		end
+		local ok, r = pcall(function() return UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) end)
+		return ok and r or false
+	end
+	local function hideTab(tab)
+		if not tab then return end
+		for _, el in ipairs(tab.elems) do
+			for _, d in ipairs(el.all) do d.Visible = false end
+		end
+	end
+
+	local function vis(y, h, cy, ch)
+		return y >= cy - 1 and y + h <= cy + ch + 1
+	end
+
+	-- Normalized line icons. Built once; no external assets or Unicode fonts.
+	local ICONS = {
+		toggle = {{-0.7,0,0.7,0},{-0.4,-0.45,-0.4,0.45},{0.4,-0.3,0.4,0.3}},
+		slider = {{-0.8,-0.4,0.8,-0.4},{-0.8,0.4,0.8,0.4},{-0.3,-0.7,-0.3,-0.1},{0.35,0.1,0.35,0.7}},
+		button = {{-0.5,-0.7,0.6,0},{0.6,0,-0.5,0.7},{-0.5,0.7,-0.5,-0.7}},
+		dropdown = {{-0.7,-0.4,0.7,-0.4},{-0.5,0.15,0,0.65},{0,0.65,0.5,0.15}},
+		keybind = {{-0.85,-0.6,0.85,-0.6},{0.85,-0.6,0.85,0.6},{0.85,0.6,-0.85,0.6},{-0.85,0.6,-0.85,-0.6},{-0.45,0.2,0.45,0.2},{-0.45,-0.2,-0.25,-0.2},{0.25,-0.2,0.45,-0.2}},
+		colorpicker = {{0,-0.85,0.65,0.25},{0.65,0.25,0.35,0.75},{0.35,0.75,-0.35,0.75},{-0.35,0.75,-0.65,0.25},{-0.65,0.25,0,-0.85}},
+		input = {{-0.5,-0.6,0.5,-0.6},{0,-0.6,0,0.6},{-0.5,0.6,0.5,0.6}},
+		progressbar = {{-0.65,0.65,-0.65,0.15},{0,0.65,0,-0.3},{0.65,0.65,0.65,-0.8}},
+		navigation = {{0,-0.85,0.65,0.75},{0.65,0.75,0,0.35},{0,0.35,-0.65,0.75},{-0.65,0.75,0,-0.85}},
+		planet = {{-0.4,-0.6,0.4,-0.6},{0.4,-0.6,0.65,0},{0.65,0,0.4,0.6},{0.4,0.6,-0.4,0.6},{-0.4,0.6,-0.65,0},{-0.65,0,-0.4,-0.6},{-0.9,0.35,0.9,-0.35}},
+		engine = {{0.25,-0.85,-0.6,0.1},{-0.6,0.1,0.05,0.1},{0.05,0.1,-0.2,0.85},{-0.2,0.85,0.65,-0.2},{0.65,-0.2,0.15,-0.2},{0.15,-0.2,0.25,-0.85}},
+		settings = {{-0.75,-0.45,0.75,-0.45},{-0.75,0.45,0.75,0.45},{0.3,-0.75,0.3,-0.15},{-0.3,0.15,-0.3,0.75}},
+		close = {{-0.65,-0.65,0.65,0.65},{0.65,-0.65,-0.65,0.65}},
+		expand = {{-0.65,-0.15,-0.65,-0.65},{-0.65,-0.65,-0.15,-0.65},{0.15,0.65,0.65,0.65},{0.65,0.65,0.65,0.15}},
+		dock = {{-0.7,0.25,-0.7,0.7},{-0.7,0.7,0.7,0.7},{0.7,0.7,0.7,0.25},{0,-0.75,0,0.3},{0,0.3,-0.3,0},{0,0.3,0.3,0}},
+		reset = {{0.6,0.45,0.1,0.75},{0.1,0.75,-0.6,0.3},{-0.6,0.3,-0.6,-0.35},{-0.6,-0.35,0,-0.7},{0,-0.7,0.6,-0.35},{0.6,-0.35,0.1,-0.3},{0.6,-0.35,0.55,-0.85}},
+	}
+	local function makeIcon(name, create)
+		local segments = ICONS[name] or ICONS.button
+		local icon = { segments = segments, draws = {} }
+		for i = 1, #segments do icon.draws[i] = create("Line", { Thickness = 1.4, Visible = false }) end
+		return icon
+	end
+	local function paintIcon(icon, x, y, size, color, visible)
+		if not icon then return end
+		local r = size / 2
+		for i, segment in ipairs(icon.segments) do
+			local d = icon.draws[i]
+			d.Visible = visible
+			if visible then
+				d.From = V(x + segment[1] * r, y + segment[2] * r)
+				d.To = V(x + segment[3] * r, y + segment[4] * r)
+				d.Color = color
+			end
+		end
+	end
+	local LABEL_RESERVE = {toggle=106, slider=118, keybind=138, colorpicker=130, progressbar=65, button=38}
+	local function fitLabel(el, room)
+		local d = el.d.lbl
+		local full = el.fullTitle or d.Text
+		room = math.max(0, math.floor(room))
+		if el.fitWidth == room and el.fitTitle == full and el.fitSize == d.Size then return end
+        el.fitSize = d.Size
+		el.fitWidth, el.fitTitle = room, full
+		d.Text = full
+		if textW(d, d.Size or 15, false) <= room then return end
+		local lo, hi = 0, #full
+		while lo < hi do
+			local mid = math.floor((lo + hi + 1) / 2)
+			d.Text = utf8Prefix(full, mid) .. "..."
+			if textW(d, d.Size or 15, false) <= room then lo = mid else hi = mid - 1 end
+		end
+		d.Text = lo > 0 and (utf8Prefix(full, lo) .. "...") or ""
+	end
+
+	local function row(el, x, y, w, h, v, hot, dt)
+		el.hov = lerp(el.hov, hot and 1 or 0, math.min(dt * 14, 1))
+		local bgc = mixC(T.Surface, el.danger and mixC(T.SurfaceHov, T.Error, 0.12) or T.SurfaceHov, el.hov)
+		local d = el.d
+        local textSize = styleValue(el,"TextSize",15)
+        d.lbl.Size = textSize
+        d.bg.Rounding = styleValue(el,"Corner",5)
+        d.outline.Rounding = styleValue(el,"Corner",7)
+        local borderWidth = styleValue(el,"Border",1)
+        d.outline.Thickness = math.max(0.1,borderWidth)
+        d.bg.Position = V(x, y); d.bg.Size = V(w, h); d.bg.Color = bgc; d.bg.Visible = v
+		d.outline.Position = V(x, y); d.outline.Size = V(w, h)
+		d.outline.Color = el.danger and T.Error or mixC(T.Border, T.AccentDim, el.hov)
+		d.outline.Visible = v and borderWidth>0
+		d.topLight.From = V(x + 10, y + 1); d.topLight.To = V(x + w - 10, y + 1)
+		d.topLight.Color = mixC(T.Surface, el.danger and T.Error or T.BorderLit, 0.3 + el.hov * 0.35); d.topLight.Visible = v
+		local iconY = (el.type == "slider" or el.type == "progressbar") and (y + 16) or (el.type == "input" and y + 18 or (el.type == "dropdown" and y + 18 or y + h / 2))
+		d.iconPlate.Position = V(x + 8, iconY - 12); d.iconPlate.Size = V(26, 24)
+		d.iconPlate.Color = mixC(T.BgAlt, el.danger and T.Error or T.AccentDim, 0.10 + el.hov * 0.16); d.iconPlate.Visible = v
+		paintIcon(el.icon, x + 21, iconY, 14, el.danger and T.Error or T.Accent, v)
+		local bh = (h - 16) * el.hov
+		d.bar.Position = V(x, y + h / 2 - bh / 2); d.bar.Size = V(2, bh); d.bar.Color = T.Accent; d.bar.Visible = v and el.hov > 0.06
+		d.lbl.Position = V(x + 38, y + math.floor((h - textSize) / 2)); d.lbl.Color = T.Text; d.lbl.Visible = v
+		local reserve = LABEL_RESERVE[el.type] or 16
+		fitLabel(el, w - 38 - reserve)
+		if el.danger then d.lbl.Color = T.Error end
+		return bgc
+	end
+
+	local function renderElem(el, x, y, w, cy, ch, now, dt, mx, my, down, click, rawClick, hoverOK)
+		local d = el.d
+		local eh = elementHeight(el)
+		local animating = (el.type == "dropdown" or el.type == "colorpicker") and math.abs(el.o - (el.open and 1 or 0)) > 0.001
+		if (y + eh < cy or y > cy + ch) and not el.sliding and not el.focused and not el.listening and not animating then
+			if not el.culled then for _, draw in ipairs(el.all) do draw.Visible = false end end
+			el.culled = true
+			return eh
+		end
+		el.culled = false
+		if el.type == "header" then
+			local h = 32
+			local v = vis(y, h, cy, ch)
+			d.plaque.Position = V(x, y + 4); d.plaque.Size = V(w, 26); d.plaque.Color = T.BgAlt; d.plaque.Visible = v
+			d.mark.Position = V(x + 9, y + 17); d.mark.Color = T.Accent; d.mark.Visible = v
+			d.txt.Position = V(x + 20, y + 9); d.txt.Color = T.TextSub; d.txt.Visible = v
+			local lx = x + 20 + textW(d.txt, 13, false) + 12
+			d.line.From = V(lx, y + 17); d.line.To = V(x + w - 12, y + 17)
+			d.line.Color = T.Border; d.line.Visible = v and lx < x + w - 12
+			return h
+
+		elseif el.type == "toggle" then
+			local h = el.height
+			local v = vis(y, h, cy, ch)
+			local hot = hoverOK and v and inRect(mx, my, x, y, w, h)
+			if click and hot and acceptAction(el, now, styleValue(el,"Cooldown",0.35)) then
+				el.value = not el.value
+				if el.flag then Kirin:Set(el.flag, el.value) end
+				fire(el.callback, el.value)
+			end
+			local bgc = row(el, x, y, w, h, v, hot, dt)
+			el.t = lerp(el.t, el.value and 1 or 0, math.min(dt * 12, 1))
+			local stx
+			if el.variant == "Checkbox" then
+				local bx, byy = x + w - 32, y + (h - 16) / 2
+				d.box.Position = V(bx, byy); d.box.Size = V(16, 16); d.box.Color = mixC(T.BorderLit, T.Accent, el.t); d.box.Visible = v
+				local s = 10 * el.t
+				d.fill.Position = V(bx + 8 - s / 2, byy + 8 - s / 2); d.fill.Size = V(s, s); d.fill.Color = T.Accent; d.fill.Visible = v and s > 0.6
+				stx = bx - 10
+			else
+				local tx, ty = x + w - 50, y + (h - 18) / 2
+				d.track.Position = V(tx, ty); d.track.Size = V(36, 18); d.track.Color = mixC(T.Border, T.AccentDim, el.t); d.track.Visible = v
+				local thx = tx + 9 + el.t * 18
+				d.ring.Position = V(thx, ty + 9); d.ring.Radius = 9 + math.sin(now * 3) * 0.8
+				d.ring.Color = mixC(bgc, T.Accent, el.t * 0.55); d.ring.Visible = v and el.t > 0.08
+				d.thumb.Position = V(thx, ty + 9); d.thumb.Color = mixC(T.TextSub, T.Text, el.t); d.thumb.Visible = v
+				stx = tx - 10
+			end
+			d.state.Text = el.value and "ON" or "OFF"
+			d.state.Position = V(stx - textW(d.state, 10, true), y + h / 2 - 6)
+			d.state.Color = mixC(T.TextDim, T.Accent, el.t); d.state.Visible = v
+			return h
+
+		elseif el.type == "slider" then
+			local h = el.height
+			local v = vis(y, h, cy, ch)
+			local hot = hoverOK and v and inRect(mx, my, x, y, w, h)
+			local tx, tw_, ty = x + 14, w - 28, y + 40
+			if click and hot and inRect(mx, my, tx - 8, ty - 12, tw_ + 16, 24) then el.sliding = true end
+			if el.sliding then
+				if down then
+					local p = clamp((mx - tx) / tw_, 0, 1)
+					local raw = el.min + (el.max - el.min) * p
+					local nv = clamp(el.min + math.floor((raw - el.min) / el.step + 0.5) * el.step, el.min, el.max)
+					if nv ~= el.value then
+						el.value = nv
+						if el.flag then Kirin:Set(el.flag, nv) end
+						fire(el.callback, nv)
+					end
+				else
+					el.sliding = false
+				end
+			end
+			row(el, x, y, w, h, v, hot or el.sliding, dt)
+			d.lbl.Position = V(x + 38, y + 9)
+			local frac = (el.value - el.min) / math.max(el.max - el.min, 1e-9)
+			el.disp = el.sliding and frac or lerp(el.disp, frac, math.min(dt * 30, 1))
+			d.val.Text = fmtNum(el.value, el.step) .. el.suffix
+			local vw = textW(d.val, 11, true)
+			local px = x + w - 14 - vw - 12
+			d.pill.Position = V(px, y + 7); d.pill.Size = V(vw + 12, 18); d.pill.Color = T.BgAlt; d.pill.Visible = v
+			d.val.Position = V(px + 6, y + 9); d.val.Color = T.Accent; d.val.Visible = v
+			d.track.Position = V(tx, ty); d.track.Size = V(tw_, 4); d.track.Color = T.Border; d.track.Visible = v
+			d.fill.Position = V(tx, ty); d.fill.Size = V(math.max(tw_ * el.disp, 0), 4); d.fill.Color = T.Accent; d.fill.Visible = v and el.disp > 0.003
+			for i = 1, 5 do
+				local tk = el.ticks[i]
+				local kx = tx + (i - 1) / 4 * tw_
+				tk.From = V(kx, ty + 8); tk.To = V(kx, ty + 11)
+				tk.Color = ((i - 1) / 4 <= el.disp + 0.001) and T.AccentDim or T.Border
+				tk.Visible = v
+			end
+			local thx = tx + tw_ * el.disp
+			local big = el.sliding and 1 or el.hov
+			d.ring.Position = V(thx, ty + 2); d.ring.Radius = 8 + big * 2; d.ring.Color = mixC(T.Surface, T.Accent, 0.5 * big); d.ring.Visible = v and big > 0.06
+			d.thumb.Position = V(thx, ty + 2); d.thumb.Radius = 5 + big * 1.5; d.thumb.Color = T.Text; d.thumb.Visible = v
+			return h
+
+		elseif el.type == "button" then
+			local h = el.height
+			local v = vis(y, h, cy, ch)
+			local hot = hoverOK and v and inRect(mx, my, x, y, w, h)
+			if click and hot and acceptAction(el, now, styleValue(el,"Cooldown",0.35)) then
+				el.flashT = 1
+				el.flashX = mx - x
+				fire(el.callback)
+			end
+			local bgc = row(el, x, y, w, h, v, hot, dt)
+			if el.primary then d.bg.Color = mixC(bgc, T.AccentDim, 0.14 + el.hov * 0.09); d.outline.Color = T.AccentDim end
+			d.action.Position = V(x + w - 33, y + 10); d.action.Size = V(24, h - 20)
+			d.action.Color = mixC(T.BgAlt, el.danger and T.Error or T.AccentDim, 0.15 + el.hov * 0.25); d.action.Visible = v
+			el.flashT = math.max(0, el.flashT - dt * 2.2)
+			if el.flashT > 0.01 then
+				local half = w * easeOut(1 - el.flashT)
+				local l = math.max(x, x + el.flashX - half)
+				local r = math.min(x + w, x + el.flashX + half)
+				d.flash.Position = V(l, y); d.flash.Size = V(math.max(0, r - l), h)
+				d.flash.Color = mixC(bgc, T.AccentDim, el.flashT * 0.75)
+				d.flash.Visible = v
+			else
+				d.flash.Visible = false
+			end
+			d.arrow.Position = V(x + w - 25, y + h / 2 - 7)
+			d.arrow.Color = mixC(T.TextDim, T.Accent, el.hov); d.arrow.Visible = v
+			return h
+
+		elseif el.type == "dropdown" then
+			local hh = el.height
+			local n = #el.options
+			local listH = n * 32 + 6
+			el.o = lerp(el.o, el.open and 1 or 0, math.min(dt * 35, 1))
+			local eo = el.o
+			local h = hh + math.floor(listH * eo + 0.5) + ((eo > 0.01) and 4 or 0)
+			local v = vis(y, hh, cy, ch)
+			local hot = hoverOK and v and inRect(mx, my, x, y, w, hh)
+			if click and hot then el.open = not el.open end
+			row(el, x, y, w, hh, v, hot or el.open, dt)
+			d.lbl.Position = V(x + 38, y + 10)
+			local txt
+			if el.multi then
+				local s = {}
+				for _, o in ipairs(el.options) do
+					if el.selected[o] then table.insert(s, o) end
+				end
+				if #s == 0 then
+					txt = "none"
+				elseif #s <= 2 then
+					txt = table.concat(s, ", ")
+				else
+					txt = s[1] .. " +" .. (#s - 1)
+				end
+			else
+				txt = tostring(el.selected)
+			end
+			local maxC = math.max(6, math.floor((w - 58) / 7))
+			if #txt > maxC then txt = string.sub(txt, 1, maxC - 2) .. ".." end
+			d.val.Text = txt
+			d.val.Position = V(x + 38, y + 36); d.val.Color = T.Accent; d.val.Visible = v
+			d.chev.Text = el.open and "^" or "v"
+			d.chev.Position = V(x + w - 21, y + 25); d.chev.Color = mixC(T.TextDim, T.Text, el.hov); d.chev.Visible = v
+			local ly = y + hh + 2
+			local revealB = ly + listH * eo
+			local top, bot = math.max(ly, cy), math.min(revealB, cy + ch)
+			d.list.Position = V(x + 6, top); d.list.Size = V(w - 12, math.max(0, bot - top)); d.list.Color = T.Panel
+			d.list.Visible = eo > 0.02 and bot - top > 2
+			for i, o in ipairs(el.options) do
+				local od = el.opts[i]
+				local oy = ly + 4 + (i - 1) * 32
+				local ov = eo > 0.02 and (oy + 30 <= revealB) and vis(oy, 30, cy, ch)
+				local sel
+				if el.multi then sel = el.selected[o] == true else sel = el.selected == o end
+				local ohot = ov and hoverOK and inRect(mx, my, x + 10, oy, w - 20, 30)
+				if click and ohot and el.open then
+					if el.multi then
+						el.selected[o] = not el.selected[o]
+						if el.flag then Kirin:Set(el.flag, el.selected) end
+						fire(el.callback, el.selected)
+					else
+						el.selected = o
+						el.open = false
+						if el.flag then Kirin:Set(el.flag, o) end
+						fire(el.callback, o)
+					end
+				end
+				od.hov = lerp(od.hov, ohot and 1 or 0, math.min(dt * 16, 1))
+				od.bg.Position = V(x + 10, oy); od.bg.Size = V(w - 20, 30)
+				od.bg.Color = sel and T.SurfaceAct or mixC(T.Panel, T.SurfaceHov, od.hov)
+				od.bg.Visible = ov and (sel or od.hov > 0.05)
+				od.bar.Position = V(x + 10, oy + 8); od.bar.Size = V(2, 14); od.bar.Color = T.Accent; od.bar.Visible = ov and sel
+				if el.multi then
+					od.txt.Text = (sel and "[x]  " or "[ ]  ") .. o
+				else
+					od.txt.Text = o
+				end
+				od.txt.Position = V(x + 22 + od.hov * 3, oy + 6)
+				od.txt.Color = sel and T.Accent or mixC(T.TextSub, T.Text, od.hov)
+				od.txt.Visible = ov
+			end
+			return h
+
+		elseif el.type == "keybind" then
+			local h = el.height
+			local v = vis(y, h, cy, ch)
+			local hot = hoverOK and v and inRect(mx, my, x, y, w, h)
+			if click and hot and not el.listening then startListen(el) end
+			row(el, x, y, w, h, v, hot or el.listening, dt)
+			local kw
+			if el.listening then
+				d.key.Text = (math.floor(now * 4) % 2 == 0) and "..." or ""
+				kw = 50
+			else
+				d.key.Text = getKeyName(el.key)
+				kw = math.max(42, textW(d.key, 11, true) + 18)
+			end
+			local kx = x + w - 14 - kw
+			d.badge.Position = V(kx, y + 12); d.badge.Size = V(kw, 20); d.badge.Color = el.listening and T.SurfaceAct or T.BgAlt; d.badge.Visible = v
+			d.badgeOutline.Position = V(kx, y + 12); d.badgeOutline.Size = V(kw, 20); d.badgeOutline.Color = el.listening and T.Accent or T.Border; d.badgeOutline.Visible = v
+			d.key.Position = V(kx + kw / 2, y + 15); d.key.Color = el.listening and T.Accent or T.Text; d.key.Visible = v
+			d.mode.Text = string.lower(el.mode)
+			d.mode.Position = V(kx - 10 - textW(d.mode, 10, true), y + 16); d.mode.Color = T.TextDim; d.mode.Visible = v
+			return h
+
+		elseif el.type == "colorpicker" then
+			local hh = el.height
+			el.o = lerp(el.o, el.open and 1 or 0, math.min(dt * 35, 1))
+			local h = hh + math.floor(34 * el.o + 0.5)
+			local v = vis(y, hh, cy, ch)
+			local hot = hoverOK and v and inRect(mx, my, x, y, w, hh)
+			if click and hot then el.open = not el.open end
+			row(el, x, y, w, hh, v, hot or el.open, dt)
+			local sx = x + w - 46
+			d.swOut.Position = V(sx - 2, y + 13); d.swOut.Size = V(34, 18); d.swOut.Color = mixC(T.Border, T.Text, el.hov * 0.6); d.swOut.Visible = v
+			d.sw.Position = V(sx, y + 15); d.sw.Size = V(30, 14); d.sw.Color = el.color; d.sw.Visible = v
+			d.hex.Text = toHex(el.color)
+			d.hex.Position = V(sx - 12 - textW(d.hex, 10, true), y + 16); d.hex.Color = T.TextDim; d.hex.Visible = v
+			local ty = y + hh + 6
+			for i, c in ipairs(el.presets) do
+				local t = el.tiles[i]
+				local tx = x + 14 + (i - 1) * 34
+				local tv = el.o > 0.6 and vis(ty, 20, cy, ch) and tx + 28 <= x + w
+				local thot = tv and hoverOK and inRect(mx, my, tx, ty, 28, 20)
+				if click and thot then
+					el.color = c
+					if el.flag then Kirin:Set(el.flag, c) end
+					fire(el.callback, c)
+				end
+				t.sq.Position = V(tx, ty - (thot and 1 or 0)); t.sq.Size = V(28, 20); t.sq.Color = c; t.sq.Visible = tv
+				t.ol.Position = V(tx - 2, ty - 2); t.ol.Size = V(32, 24); t.ol.Color = T.Text; t.ol.Visible = tv and colorEq(c, el.color)
+			end
+			return h
+
+		elseif el.type == "input" then
+			local h = el.height
+			local v = vis(y, h, cy, ch)
+			local bw = w - 28
+			local bx, byy = x + 14, y + 37
+			local hotBox = hoverOK and v and inRect(mx, my, bx, byy, bw, 27)
+			local hot = hoverOK and v and inRect(mx, my, x, y, w, h)
+			if click and hotBox then
+				if activeInput ~= el then
+					finishInput()
+					if activeCaptor then activeCaptor.listening = false; activeCaptor = nil end
+					activeInput = el
+					el.focused = true
+					snapshotKeys(0x08, 0xFE)
+				end
+			elseif rawClick and el.focused and not hotBox then
+				finishInput()
+			end
+			row(el, x, y, w, h, v, hot or el.focused, dt)
+			d.lbl.Position = V(x + 38, y + 11)
+			el.f = lerp(el.f, el.focused and 1 or 0, math.min(dt * 12, 1))
+			d.box.Position = V(bx, byy); d.box.Size = V(bw, 27); d.box.Color = mixC(T.BgAlt, T.Bg, el.f); d.box.Visible = v
+			d.boxOl.Position = V(bx, byy); d.boxOl.Size = V(bw, 27); d.boxOl.Color = mixC(T.Border, T.Accent, el.f); d.boxOl.Visible = v
+			local maxC = math.max(4, math.floor((bw - 16) / 6.6))
+			local shown
+			if el.text == "" and not el.focused then
+				shown = el.placeholder
+				if #shown > maxC then shown = string.sub(shown, 1, maxC - 2) .. ".." end
+				d.txt.Color = T.TextDim
+			else
+				local s = el.text
+				if #s > maxC - 1 then s = ".." .. string.sub(s, -(maxC - 3)) end
+				shown = s .. ((el.focused and math.floor(now * 2.2) % 2 == 0) and "|" or "")
+				d.txt.Color = T.Text
+			end
+			d.txt.Text = shown
+			d.txt.Position = V(bx + 8, byy + 6); d.txt.Visible = v
+			return h
+
+		elseif el.type == "progressbar" then
+			local h = el.height
+			local v = vis(y, h, cy, ch)
+			local hot = hoverOK and v and inRect(mx, my, x, y, w, h)
+			row(el, x, y, w, h, v, hot, dt)
+			d.lbl.Position = V(x + 38, y + 9)
+			el.disp = lerp(el.disp, clamp(el.progress, 0, 1), math.min(dt * 6, 1))
+			d.pct.Text = tostring(math.floor(el.disp * 100 + 0.5)) .. "%"
+			d.pct.Position = V(x + w - 14 - textW(d.pct, 11, true), y + 10); d.pct.Color = T.Accent; d.pct.Visible = v
+			local tx, tw_, ty = x + 14, w - 28, y + 38
+			local fw = tw_ * el.disp
+			d.track.Position = V(tx, ty); d.track.Size = V(tw_, 5); d.track.Color = T.Border; d.track.Visible = v
+			d.fill.Position = V(tx, ty); d.fill.Size = V(fw, 5); d.fill.Color = T.Accent; d.fill.Visible = v and fw > 1
+			local sx = tx + ((now * 90) % (fw + 40)) - 30
+			local l, r = math.max(sx, tx), math.min(sx + 30, tx + fw)
+			d.shine.Position = V(l, ty); d.shine.Size = V(math.max(0, r - l), 5); d.shine.Color = mixC(T.Accent, T.AccentGlow, 0.7)
+			d.shine.Visible = v and r - l > 1
+			return h
+
+		elseif el.type == "paragraph" then
+			local h = el.height
+			local v = vis(y, h, cy, ch)
+			d.txt.Position = V(x + 4, y + 3); d.txt.Color = T.TextSub; d.txt.Visible = v
+			return h
+
+		elseif el.type == "divider" then
+			local h = 14
+			local v = vis(y, h, cy, ch)
+			local yy = y + 7
+			d.l1.From = V(x + 6, yy); d.l1.To = V(x + w / 2 - 9, yy); d.l1.Color = T.Border; d.l1.Visible = v
+			d.l2.From = V(x + w / 2 + 9, yy); d.l2.To = V(x + w - 6, yy); d.l2.Color = T.Border; d.l2.Visible = v
+			d.dot.Position = V(x + w / 2, yy); d.dot.Color = T.AccentDim; d.dot.Visible = v
+			return h
+		end
+		return el.height or 8
+	end
+
+	local function renderMini(now, dt, mx, my, down, clicked)
+		if miniAppear <= 0.01 then
+			for _, d in ipairs(miniList) do d.Visible = false end
+			return
+		end
+		local a = clamp(miniAppear, 0, 1)
+		local pop = easeBack(a)
+		local cx, cy = miniX, miniY + math.sin(now * 1.7) * 3
+		local docked = minimized and visible
+		local hov = docked and ((mx - cx) ^ 2 + (my - cy) ^ 2) <= 900
+		miniHover = lerp(miniHover, hov and 1 or 0, math.min(dt * 10, 1))
+		local s = pop * (1 + 0.07 * miniHover)
+		local R = 28 * s
+		if docked and miniAppear > 0.6 then
+			if clicked and hov then
+				miniDrag = true
+				miniSX, miniSY = mx, my
+				miniDX, miniDY = mx - miniX, my - miniY
+			end
+			if miniDrag then
+				if down then
+					local v2 = camera.ViewportSize
+					miniX = clamp(mx - miniDX, 30, v2.X - 30)
+					miniY = clamp(my - miniDY, 30, v2.Y - 30)
+				else
+					miniDrag = false
+					if (mx - miniSX) ^ 2 + (my - miniSY) ^ 2 < 36 then minimized = false end
+				end
+			end
+		end
+		for k = 1, 2 do
+			local ring = mSonar[k]
+			local ph = (now * 0.55 + k * 0.5) % 1
+			ring.Position = V(cx, cy)
+			ring.Radius = R + 4 + ph * 18
+			ring.Color = mixC(T.AccentGlow, T.AccentDim, ph)
+			if HAS_T then
+				ring.Transparency = (1 - ph) * 0.7 * a
+				ring.Visible = true
+			else
+				ring.Visible = ph < 0.7
+			end
+		end
+		mDisc.Position = V(cx, cy); mDisc.Radius = R; mDisc.Color = T.BgAlt; mDisc.Visible = true
+		if not miniImgSet then
+			local data = iconData or bobData or loadBob()
+			if data then
+				miniImgSet = pcall(function() mImage.Data = data end)
+			end
+		end
+		if miniImgSet then
+			mImage.Size = V(46 * s, 52 * s)
+			mImage.Position = V(cx - 23 * s, cy - 26 * s)
+			mImage.Visible = true
+			mLetter.Visible = false
+		else
+			mImage.Visible = false
+			mLetter.Position = V(cx, cy - 11 * s); mLetter.Color = T.Text; mLetter.Visible = true
+		end
+		mInner.Position = V(cx, cy); mInner.Radius = math.max(1, R - 3); mInner.Color = T.Border; mInner.Visible = true
+		mRing.Position = V(cx, cy); mRing.Radius = R; mRing.Color = mixC(T.Accent, T.AccentGlow, miniHover); mRing.Visible = true
+		local rot = -0.35
+		local cr, sr = math.cos(rot), math.sin(rot)
+		for k = 1, 2 do
+			local dot = mDots[k]
+			local ang = now * ((k == 1) and 1.5 or -1.1) + k * 2
+			local ex, ey = math.cos(ang) * (R + 10), math.sin(ang) * (R * 0.36)
+			local rx, ry = ex * cr - ey * sr, ex * sr + ey * cr
+			dot.Position = V(cx + rx, cy + ry)
+			dot.Radius = ((k == 1) and 2.4 or 1.7) * math.max(s, 0.1)
+			dot.Color = (k == 1) and T.AccentGlow or T.TextSub
+			dot.Visible = not (math.sin(ang) < 0 and (rx * rx + ry * ry) < R * R)
+		end
+		mHint.Position = V(cx, cy + R + 8); mHint.Color = T.TextSub; mHint.Visible = miniHover > 0.4
+		if HAS_T then
+			mDisc.Transparency = a; mImage.Transparency = a; mInner.Transparency = a; mRing.Transparency = a
+			mLetter.Transparency = a; mDots[1].Transparency = a; mDots[2].Transparency = a
+			mHint.Transparency = miniHover * a
+		end
+	end
+
+	local function renderWindow(now, dt, mx, my, down, clicked)
+		local e = easeOut(clamp(appear, 0, 1))
+		local live = visible and not minimized and appear > 0.01
+		if HAS_T and math.abs(e - lastAlpha) > 0.003 then
+			for _, r in ipairs(registry) do r.d.Transparency = r.a * e end
+			lastAlpha = e
+		end
+		if not resizing then
+			W = lerp(W, tW, math.min(dt * 12, 1))
+			H = lerp(H, tH, math.min(dt * 12, 1))
+			if math.abs(W - tW) < 0.5 then W = tW end
+			if math.abs(H - tH) < 0.5 then H = tH end
+		end
+		local X = math.floor(winX + 0.5)
+		local Y = math.floor(winY + (1 - e) * 18 + 0.5)
+		local w, h = math.floor(W + 0.5), math.floor(H + 0.5)
+
+		local by = Y + TITLE_H / 2
+		local bx = { X + w - 22, X + w - 42, X + w - 62 }
+		local overBtns = inRect(mx, my, X + w - 72, Y + 8, 62, TITLE_H - 16)
+		btnHover = lerp(btnHover, overBtns and 1 or 0, math.min(dt * 12, 1))
+		local gripHot = inRect(mx, my, X + w - 18, Y + h - 18, 18, 18)
+
+		if live and clicked then
+			if gripHot then
+				resizing = true
+				resDX, resDY = mx - W, my - H
+			elseif inRect(mx, my, X, Y, w, TITLE_H) then
+				local hit = 0
+				for i = 1, 3 do
+					if (mx - bx[i]) ^ 2 + (my - by) ^ 2 <= 81 then hit = i end
+				end
+				if hit == 1 then
+					visible = false
+					Kirin:Notify({ Title = "Panel hidden", Content = "Press " .. getKeyName(togKey) .. " to bring it back.", Type = "info", Duration = 3 })
+				elseif hit == 2 then
+					minimized = true
+				elseif hit == 3 then
+					expanded = not expanded
+					if expanded then
+						tW, tH = math.min(MAX_W, 790), math.min(MAX_H, 570)
+					else
+						tW, tH = normalW, normalH
+					end
+				else
+					dragging = true
+					dragDX, dragDY = mx - winX, my - winY
+				end
+			end
+		end
+		if resizing then
+			if down then
+				W = clamp(mx - resDX, MIN_W, MAX_W)
+				H = clamp(my - resDY, MIN_H, MAX_H)
+				tW, tH = W, H
+			else
+				resizing = false
+				normalW, normalH = tW, tH
+				expanded = false
+			end
+		end
+		if dragging then
+			if down then
+				local v2 = camera.ViewportSize
+				winX = clamp(mx - dragDX, 80 - w, v2.X - 80)
+				winY = clamp(my - dragDY, 0, v2.Y - 40)
+			else
+				dragging = false
+			end
+		end
+
+		-- Fit visible bounds to the current viewport, including resolution changes.
+        local vp = camera.ViewportSize
+        W=math.min(W,math.max(320,vp.X-20))
+        H=math.min(H,math.max(260,vp.Y-20))
+        winX=clamp(winX,0,math.max(0,vp.X-W))
+        winY=clamp(winY,0,math.max(0,vp.Y-H))
+        -- Apply drag/resize coordinates in the same frame as the input.
+		X, Y = math.floor(winX + 0.5), math.floor(winY + (1 - e) * 18 + 0.5)
+		w, h = math.floor(W + 0.5), math.floor(H + 0.5)
+		if HAS_T then
+			shadows[1].Position = V(X - 6, Y - 2); shadows[1].Size = V(w + 12, h + 14)
+			shadows[2].Position = V(X - 2, Y + 1); shadows[2].Size = V(w + 4, h + 5)
+		else
+			shadows[1].Position = V(X + 2, Y + 3); shadows[1].Size = V(w, h)
+		end
+		for _, s in ipairs(shadows) do s.Visible = true end
+		winBg.Position = V(X, Y); winBg.Size = V(w, h); winBg.Color = T.Bg; winBg.Visible = true
+
+		local areaX, areaY = X + SIDE_W, Y + TITLE_H
+		local areaW, areaH = w - SIDE_W, h - TITLE_H - FOOT_H
+		local scaleR = math.min(1, h / 470)
+		local maxR = NEB_R[1] * scaleR
+		for _, n in ipairs(nebula) do
+			local c = NEB[n.c]
+			local px = areaX + areaW * c.rx + math.sin(now * 0.08 + c.ph) * 14
+			local py = areaY + areaH * c.ry + math.cos(now * 0.06 + c.ph) * 10
+			px = clamp(px, areaX + 10, X + w - maxR - 4)
+			py = clamp(py, Y + maxR + 4, Y + h - maxR - 4)
+			local off = (4 - n.r) * 1.2
+			n.d.Position = V(px + math.sin(now * 0.3 + n.r) * off, py + math.cos(now * 0.25 + n.r) * off)
+			n.d.Radius = NEB_R[n.r] * scaleR
+			n.d.Color = mixC(T.Bg, T[c.key], NEB_K[n.r])
+			n.d.Visible = true
+		end
+
+		paintGarden(now, areaX + 4, areaY + 4, areaW - 8, areaH - 8, e)
+		local pmx = clamp((mx - (X + w / 2)) / w, -1, 1)
+		local pmy = clamp((my - (Y + h / 2)) / h, -1, 1)
+		local sw, sh = math.max(areaW - 12, 1), math.max(areaH - 12, 1)
+		for _, s in ipairs(stars) do
+			s.u = (s.u + s.sp * s.depth * dt / sw) % 1
+			local sx = areaX + 6 + ((s.u * sw - pmx * 10 * s.depth) % sw)
+			local sy = areaY + 6 + ((s.v * sh - pmy * 7 * s.depth) % sh)
+			local tw = (math.sin(now * s.tw + s.ph) + 1) * 0.5
+			s.d.Position = V(sx, sy)
+			s.d.Radius = 0.7 + s.depth * 0.8 + tw * 0.35
+			s.d.Color = mixC(T.Bg, STAR_TINT[s.tint], (0.25 + 0.75 * tw) * (0.35 + 0.65 * s.depth))
+			s.d.Visible = true
+			setA(s.d, e)
+			if s.g1 then
+				local gl = 1 + tw * tw * 4
+				local gc = mixC(T.Bg, STAR_TINT[s.tint], tw * 0.8)
+				s.g1.From = V(sx - gl, sy); s.g1.To = V(sx + gl, sy); s.g1.Color = gc; s.g1.Visible = tw > 0.35
+				s.g2.From = V(sx, sy - gl); s.g2.To = V(sx, sy + gl); s.g2.Color = gc; s.g2.Visible = tw > 0.35
+				setA(s.g1, e); setA(s.g2, e)
+			end
+		end
+
+		if not shoot.active and now > shoot.nextAt then
+			shoot.active = true
+			shoot.t0 = now
+			shoot.u = 0.35 + math.random() * 0.6
+			shoot.v = 0.05 + math.random() * 0.3
+			shoot.speed = 300 + math.random() * 160
+		end
+		if shoot.active then
+			local age = now - shoot.t0
+			local dx, dy = -0.89, 0.45
+			local hx = areaX + shoot.u * areaW + dx * shoot.speed * age
+			local hy = areaY + shoot.v * areaH + dy * shoot.speed * age
+			local fade = clamp(1 - age / 1.3, 0, 1)
+			local any = false
+			for k = 1, 7 do
+				local seg = shoot.segs[k]
+				local x1, y1 = hx - dx * (k - 1) * 10, hy - dy * (k - 1) * 10
+				local x2, y2 = hx - dx * k * 10, hy - dy * k * 10
+				local ok = inRect(x1, y1, areaX + 2, areaY + 2, areaW - 4, areaH - 4) and inRect(x2, y2, areaX + 2, areaY + 2, areaW - 4, areaH - 4)
+				if ok then any = true end
+				seg.From = V(x1, y1); seg.To = V(x2, y2)
+				seg.Color = mixC(T.Bg, T.AccentGlow, (1 - (k - 1) / 7) * fade)
+				seg.Visible = ok
+				setA(seg, e)
+			end
+			if (not any and age > 0.2) or age > 1.5 then
+				shoot.active = false
+				shoot.nextAt = now + 3.5 + math.random() * 6
+				for k = 1, 7 do shoot.segs[k].Visible = false end
+			end
+		end
+
+		titleBg.Position = V(X, Y); titleBg.Size = V(w, TITLE_H); titleBg.Color = T.BgAlt; titleBg.Visible = true
+		titleFill.Position = V(X, Y + TITLE_H - 12); titleFill.Size = V(w, 12); titleFill.Color = T.BgAlt; titleFill.Visible = true
+		topGlass.From = V(X + 12, Y + 1); topGlass.To = V(X + w - 12, Y + 1); topGlass.Color = mixC(T.BgAlt, T.BorderLit, 0.55); topGlass.Visible = true
+		local hx = X + 12 + (w - 24) * ((now * 0.32) % 1.6)
+		local function edgeSeg(line, a, b, col)
+			a = clamp(a, X + 12, X + w - 12)
+			b = clamp(b, X + 12, X + w - 12)
+			line.From = V(a, Y + 1); line.To = V(b, Y + 1); line.Color = col; line.Visible = b - a > 1
+		end
+		edgeSeg(beamTail, hx - 150, hx, T.AccentDim)
+		edgeSeg(beam, hx - 50, hx, T.AccentGlow)
+		for i, glow in ipairs(beamGlow) do
+			edgeSeg(glow, hx - 62 + i * 4, hx, HAS_T and T.Accent or mixC(T.BgAlt, T.Accent, i * 0.08))
+			setA(glow, e * (0.06 + i * 0.045))
+		end
+		beamSpark.Position = V(clamp(hx, X + 12, X + w - 12), Y + 1)
+		beamSpark.Color = T.AccentGlow
+		beamSpark.Visible = hx > X + 12 and hx < X + w - 12
+		setA(beamSpark, e * 0.85)
+		for i = 1, 10 do
+			local l = titleGrad[i]
+			l.From = V(X + (i - 1) * w / 10, Y + TITLE_H); l.To = V(X + i * w / 10, Y + TITLE_H)
+			l.Color = mixC(T.AccentDim, T.Border, math.min(1, (i - 1) / 4))
+			l.Visible = true
+		end
+		sidePanel.Position = V(X, Y + TITLE_H + 1); sidePanel.Size = V(SIDE_W, h - TITLE_H - FOOT_H - 1); sidePanel.Color = T.Panel; sidePanel.Visible = true
+		sideLine.From = V(X + SIDE_W, Y + TITLE_H + 1); sideLine.To = V(X + SIDE_W, Y + h - FOOT_H); sideLine.Color = T.Border; sideLine.Visible = true
+
+		local pcx, pcy = X + 23, Y + TITLE_H / 2
+		local rot = -0.38 + math.sin(now * 0.5) * 0.06
+		local cr, sr = math.cos(rot), math.sin(rot)
+		for i = 1, 16 do
+			local a0 = (i - 1) / 16 * math.pi * 2
+			local a1 = i / 16 * math.pi * 2
+			local ex0, ey0 = math.cos(a0) * 14, math.sin(a0) * 3.8
+			local ex1, ey1 = math.cos(a1) * 14, math.sin(a1) * 3.8
+			local l = ringSegs[i]
+			l.From = V(pcx + ex0 * cr - ey0 * sr, pcy + ex0 * sr + ey0 * cr)
+			l.To = V(pcx + ex1 * cr - ey1 * sr, pcy + ex1 * sr + ey1 * cr)
+			l.Color = (i <= 8) and T.AccentGlow or T.AccentDim
+			l.Visible = true
+		end
+		planet.Position = V(pcx, pcy); planet.Radius = 7; planet.Color = T.Accent; planet.Visible = true
+		planetShade.Position = V(pcx + 3, pcy - 2.5); planetShade.Radius = 6; planetShade.Color = T.BgAlt; planetShade.Visible = true
+		planetSpec.Position = V(pcx - 3, pcy + 2); planetSpec.Radius = 1.5; planetSpec.Color = T.AccentGlow; planetSpec.Visible = true
+		local ma = now * 1.25
+		local mex, mey = math.cos(ma) * 19, math.sin(ma) * 5.5
+		local mxp, myp = pcx + mex * cr - mey * sr, pcy + mex * sr + mey * cr
+		moon.Position = V(mxp, myp); moon.Radius = 1.8; moon.Color = T.TextSub
+		moon.Visible = not (math.sin(ma) < 0 and ((mxp - pcx) ^ 2 + (myp - pcy) ^ 2) < 81)
+
+		if now > glitchAt then
+			glitchUntil = now + 0.08 + math.random() * 0.08
+			glitchAt = now + 7 + math.random() * 9
+		end
+		local gl = now < glitchUntil
+		local jx = gl and math.random(-1, 1) or 0
+		ghostA.Position = V(X + 46, Y + 8); ghostA.Color = T.Error; ghostA.Visible = gl
+		ghostB.Position = V(X + 42, Y + 9); ghostB.Color = T.Accent; ghostB.Visible = gl
+		titleText.Position = V(X + 44 + jx, Y + 8); titleText.Color = T.Text; titleText.Visible = true
+		subText.Text = author .. ((math.floor(now * 1.4) % 2 == 0) and " _" or "")
+		subText.Position = V(X + 44, Y + 25); subText.Color = T.TextDim; subText.Visible = true
+
+		for i = 1, 3 do
+			local b = tBtns[i]
+			local hot = (mx - bx[i]) ^ 2 + (my - by) ^ 2 <= 81
+			local tone = i == 1 and T.Error or T.Accent
+			b.bg.Position = V(bx[i] - 9, by - 9); b.bg.Size = V(18, 18)
+			b.bg.Color = mixC(T.BgAlt, tone, hot and 0.22 or 0.07); b.bg.Visible = true
+			b.border.Position = b.bg.Position; b.border.Size = b.bg.Size
+			b.border.Color = hot and tone or T.BorderLit; b.border.Visible = true
+			local glyph = i == 1 and WINDOW_GLYPHS.close or (i == 2 and WINDOW_GLYPHS.minimize
+				or (expanded and WINDOW_GLYPHS.restore or WINDOW_GLYPHS.expand))
+			for j, stroke in ipairs(b.strokes) do
+				local segment = glyph[j]
+				stroke.Visible = segment ~= nil
+				if segment then
+					stroke.From = V(bx[i] + segment[1], by + segment[2])
+					stroke.To = V(bx[i] + segment[3], by + segment[4])
+					stroke.Color = i == 1 and T.Error or (hot and T.AccentGlow or T.TextSub)
+				end
+			end
+		end
+
+		local sy = Y + TITLE_H + 14
+		local first = true
+		local activeY = nil
+		for _, ent in ipairs(side) do
+			if ent.kind == "section" then
+				if not first then sy = sy + 6 end
+				ent.txt.Position = V(X + 16, sy); ent.txt.Color = T.TextDim; ent.txt.Visible = true
+				local lx = X + 16 + textW(ent.txt, 10, true) + 6
+				ent.line.From = V(lx, sy + 6); ent.line.To = V(X + SIDE_W - 14, sy + 6)
+				ent.line.Color = mixC(T.Panel, T.Border, 0.8); ent.line.Visible = lx < X + SIDE_W - 20
+				sy = sy + 20
+			else
+				local tab = ent.tab
+				local isA = tab == activeTab
+				local hot = live and inRect(mx, my, X + 8, sy, SIDE_W - 16, 30)
+				if hot and clicked and not isA then
+					hideTab(activeTab)
+					activeTab = tab
+					isA = true
+					scrollY, scrollTarget = 0, 0
+					scrollDragging = false
+					contentSlide, typeT, typeStart = 1, 0, now
+				end
+				tab.hov = lerp(tab.hov, hot and 1 or 0, math.min(dt * 14, 1))
+				tab.act = lerp(tab.act, isA and 1 or 0, math.min(dt * 10, 1))
+				tab.hbg.Position = V(X + 8, sy); tab.hbg.Size = V(SIDE_W - 16, 30)
+				tab.hbg.Color = mixC(T.Panel, T.SurfaceHov, tab.hov * 0.7)
+				tab.hbg.Visible = (not isA) and tab.hov > 0.05
+				tab.idx.Position = V(X + 18, sy + 9); tab.idx.Color = mixC(T.TextDim, T.Accent, tab.act); tab.idx.Visible = false
+				paintIcon(tab.icon, X + 25, sy + 15, 15, mixC(T.TextSub, T.Accent, tab.act), true)
+				tab.lbl.Position = V(X + 40 + tab.act * 3, sy + 8)
+				tab.lbl.Color = mixC(T.TextSub, T.Text, math.max(tab.act, tab.hov)); tab.lbl.Visible = true
+				if isA then activeY = sy end
+				sy = sy + 34
+			end
+			first = false
+		end
+		if glider and activeY then
+			gliderY = gliderY and lerp(gliderY, activeY - Y, math.min(dt * 14, 1)) or (activeY - Y)
+			glider.bg.Position = V(X + 8, Y + gliderY); glider.bg.Size = V(SIDE_W - 16, 30); glider.bg.Color = T.SurfaceAct; glider.bg.Visible = true
+			glider.bar.Position = V(X + 8, Y + gliderY + 7); glider.bar.Size = V(3, 16); glider.bar.Color = T.Accent; glider.bar.Visible = true
+		end
+
+		local cx = X + SIDE_W + 16
+		local cw = w - SIDE_W - 16 - 20
+		local hy = Y + TITLE_H + 10
+		typeT = math.min(1, typeT + dt * 3.2)
+		contentSlide = lerp(contentSlide, 0, math.min(dt * 28, 1))
+		if activeTab then
+			local name = string.upper(activeTab.title)
+			local nshow = math.floor(#name * typeT + 0.5)
+			local cursor = (typeT < 1) or ((now - typeStart) < 2 and math.floor(now * 3) % 2 == 0)
+			headTitle.Text = string.sub(name, 1, nshow) .. (cursor and "_" or "")
+			headTitle.Position = V(cx, hy); headTitle.Color = T.Text; headTitle.Visible = true
+			headCrumb.Text = string.lower(activeTab.section) .. " / " .. string.format("%02d", activeTab.index)
+			headCrumb.Position = V(cx + cw + 12 - textW(headCrumb, 10, true), hy + 5); headCrumb.Color = T.TextDim; headCrumb.Visible = true
+			headLine.From = V(cx, hy + 26); headLine.To = V(cx + cw + 12, hy + 26); headLine.Color = T.Border; headLine.Visible = true
+			local aw = math.min(cw, math.max(24, #name * 10)) * easeOut(typeT)
+			headAccent.From = V(cx, hy + 26); headAccent.To = V(cx + aw, hy + 26); headAccent.Color = T.Accent; headAccent.Visible = aw > 1
+		end
+
+		local cy = Y + TITLE_H + HEAD_H + 12
+		local ch = h - TITLE_H - HEAD_H - FOOT_H - 18
+		cRect[1], cRect[2], cRect[3], cRect[4] = cx, cy, cw, ch
+
+        -- Measure before handling input so tabs, resizing and dynamic lists clamp immediately.
+        local placements,totalHeight = measureTab(activeTab,cw)
+        maxScroll = math.max(0, totalHeight - ch)
+        scrollTarget = clamp(scrollTarget, 0, maxScroll)
+        scrollY = clamp(scrollY, 0, maxScroll)
+        local sbx = cx + cw + 9
+        local th = math.min(ch, math.max(26, ch * ch / (ch + maxScroll)))
+        local travel = math.max(0, ch - th)
+        local ty = cy + travel * (maxScroll > 0 and scrollY / maxScroll or 0)
+        local scrollHot = live and maxScroll > 1 and inRect(mx, my, sbx - 8, cy, 16, ch)
+        if not live or maxScroll <= 1 or resizing or dragging then scrollDragging = false end
+        if scrollHot and clicked and not resizing and not dragging then
+            scrollDragging = true
+            -- Track clicks place the thumb under the pointer; thumb clicks preserve the grip.
+            scrollGrab = inRect(mx, my, sbx - 8, ty, 16, th) and (my - ty) or th / 2
+            clicked = false
+        end
+        if scrollDragging then
+            if down and live then
+                scrollTarget = travel > 0 and clamp((my - cy - scrollGrab) / travel, 0, 1) * maxScroll or 0
+                scrollY = scrollTarget -- no interpolation while the pointer owns the thumb
+                scrollFlash = 1
+            else scrollDragging = false end
+        end
+        if POLL and live and not activeInput and not scrollDragging and inRect(mx, my, cx, cy, cw + 18, ch) then
+            if iskeypressed(0x21) then scrollTarget = scrollTarget - 700 * dt; scrollFlash = 1 end
+            if iskeypressed(0x22) then scrollTarget = scrollTarget + 700 * dt; scrollFlash = 1 end
+        end
+        scrollTarget = clamp(scrollTarget, 0, maxScroll)
+        if not scrollDragging then scrollY = lerp(scrollY, scrollTarget, math.min(dt * 40, 1)) end
+        if math.abs(scrollY - scrollTarget) < 0.15 then scrollY = scrollTarget end
+        local inContent = live and not scrollDragging and inRect(mx, my, cx, cy, cw, ch)
+        if activeTab then
+            local ox = math.floor(contentSlide * 16)
+            for _,el in ipairs(activeTab.elems) do
+                if el.visible == false then for _,d in ipairs(el.all) do d.Visible=false end end
+            end
+            for _,item in ipairs(placements) do
+                renderElem(item.el, cx+ox+item.x, cy-scrollY+item.y, item.w, cy,ch,
+                    now,dt,mx,my,down,clicked and inContent,clicked and live and not scrollDragging,inContent)
+            end
+            maxScroll = math.max(0,totalHeight-ch)
+            scrollTarget,scrollY=clamp(scrollTarget,0,maxScroll),clamp(scrollY,0,maxScroll)
+        end
+        scrollFlash = math.max(0, scrollFlash - dt * 1.5)
+        if maxScroll > 1 then
+            th = math.min(ch, math.max(26, ch * ch / (ch + maxScroll)))
+            ty = cy + (ch - th) * clamp(scrollY / maxScroll, 0, 1)
+            local sw = (scrollHot or scrollDragging) and 5 or 3
+            scrollTrack.From = V(sbx, cy); scrollTrack.To = V(sbx, cy + ch); scrollTrack.Color = mixC(T.Bg, T.Border, 0.7); scrollTrack.Visible = true
+            scrollThumb.Position = V(sbx - sw / 2, ty); scrollThumb.Size = V(sw, th)
+            scrollThumb.Color = mixC(T.BorderLit, T.Accent, math.max(scrollFlash, (scrollHot or scrollDragging) and 1 or 0)); scrollThumb.Visible = true
+        else
+            scrollDragging = false
+            scrollTrack.Visible = false; scrollThumb.Visible = false
+        end
+
+		local fy = Y + h - FOOT_H
+		footBg.Position = V(X, fy); footBg.Size = V(w, FOOT_H); footBg.Color = T.Panel; footBg.Visible = true
+		footFill.Position = V(X, fy); footFill.Size = V(w, 10); footFill.Color = T.Panel; footFill.Visible = true
+		footLine.From = V(X, fy); footLine.To = V(X + w, fy); footLine.Color = T.Border; footLine.Visible = true
+		local up = math.floor(now - startT)
+		footLeft.Text = string.format("SEC %02d.%02d   T+%02d:%02d:%02d", math.floor(winX / 37) % 100, math.floor(winY / 29) % 100, math.floor(up / 3600), math.floor(up / 60) % 60, up % 60)
+		footLeft.Position = V(X + 14, fy + 8); footLeft.Color = T.TextDim; footLeft.Visible = true
+		footRight.Text = tostring(fps) .. " FPS"
+		local frw = textW(footRight, 10, true)
+		footRight.Position = V(X + w - 30 - frw, fy + 8)
+		footRight.Color = (fps >= 50 and T.Ok) or (fps >= 30 and T.Warn) or T.Error
+		footRight.Visible = true
+		if now - signalT > 0.35 then
+			signalT = now
+			signal = clamp(signal + math.random(-1, 1), 2, 6)
+		end
+		local bx0 = X + w - 30 - frw - 14 - 6 * 4
+		for i = 1, 6 do
+			local bh = 2 + i * 1.3
+			bars[i].Position = V(bx0 + (i - 1) * 4, fy + 17 - bh); bars[i].Size = V(2, bh)
+			bars[i].Color = (i <= signal) and T.Accent or T.Border
+			bars[i].Visible = true
+		end
+		for _, g in ipairs(grip) do
+			g.d.Position = V(X + w - 7 - g.i * 4, Y + h - 7 - g.j * 4)
+			g.d.Color = (gripHot or resizing) and T.Accent or T.TextDim
+			g.d.Visible = true
+		end
+
+		border.Position = V(X, Y); border.Size = V(w, h); border.Color = T.Border; border.Visible = true
+		local bc = mixC(T.AccentDim, T.Accent, (math.sin(now * 1.4) + 1) * 0.25)
+		local corners = { { X - 4, Y - 4, 1, 1 }, { X + w + 4, Y - 4, -1, 1 }, { X - 4, Y + h + 4, 1, -1 }, { X + w + 4, Y + h + 4, -1, -1 } }
+		for i, c in ipairs(corners) do
+			local l1, l2 = brackets[i * 2 - 1], brackets[i * 2]
+			l1.From = V(c[1], c[2]); l1.To = V(c[1] + 12 * c[3], c[2]); l1.Color = bc; l1.Visible = true
+			l2.From = V(c[1], c[2]); l2.To = V(c[1], c[2] + 12 * c[4]); l2.Color = bc; l2.Visible = true
+		end
+	end
+
+	table.insert(conns, connectFrame(function(rdt)
+		if not Kirin._alive or not windowAlive then return end
+		local ok, err = pcall(function()
+			refreshRuntime()
+			local dt = clamp(finite(rdt, 0.016), 0.001, 0.05)
+			local now = clock()
+			frames = frames + 1
+			if now - fpsT >= 0.5 then
+				fps = math.floor(frames / (now - fpsT) + 0.5)
+				frames = 0
+				fpsT = now
+			end
+			local mx, my = (mouse and mouse.X) or 0, (mouse and mouse.Y) or 0
+			local down = isDown()
+			local clicked = down and not prevDown
+			prevDown = down
+			pollKeys(now)
+			local shown = visible and not minimized
+			appear = approach(appear, shown and 1 or 0, dt * (shown and 4.5 or 7))
+			miniAppear = approach(miniAppear, (visible and minimized and appear < 0.35) and 1 or 0, dt * 5)
+			renderMini(now, dt, mx, my, down, clicked)
+			if appear <= 0.005 then
+				if not hiddenFlag then
+					for _, d in ipairs(winList) do d.Visible = false end
+					hiddenFlag = true
+					lastAlpha = -1
+				end
+				dragging = false
+				resizing = false
+			else
+				if hiddenFlag then
+					hiddenFlag = false
+					typeT, typeStart, contentSlide = 0, now, 1
+				end
+				renderWindow(now, dt, mx, my, down, clicked)
+			end
+		end)
+		if not ok and not errShown then
+			errShown = true
+			print("[Astra] render error: " .. tostring(err))
+		end
+	end))
+
+	local lastWheel = 0
+	local function onWheel(z)
+		local now = clock()
+		if now - lastWheel < 0.01 then return end
+		lastWheel = now
+		if not visible or minimized or scrollDragging then return end
+		local mx, my = (mouse and mouse.X) or 0, (mouse and mouse.Y) or 0
+		if not inRect(mx, my, cRect[1], cRect[2], cRect[3] + 16, cRect[4]) then return end
+		scrollTarget = clamp(scrollTarget - z * 44, 0, maxScroll)
+		scrollFlash = 1
+	end
+	pcall(function()
+		table.insert(conns, UserInputService.InputChanged:Connect(function(input)
+			pcall(function()
+				if input.UserInputType == Enum.UserInputType.MouseWheel then onWheel(input.Position.Z) end
+			end)
+		end))
+	end)
+	pcall(function() table.insert(conns, mouse.WheelForward:Connect(function() onWheel(1) end)) end)
+	pcall(function() table.insert(conns, mouse.WheelBackward:Connect(function() onWheel(-1) end)) end)
+
+	if not POLL then
+		pcall(function()
+			table.insert(conns, UserInputService.InputBegan:Connect(function(input)
+				pcall(function()
+					local code = normalizeKey(input.KeyCode)
+					if activeCaptor then
+						captureKey(code)
+						return
+					end
+					if activeInput then
+						local ch = safeGet(input, "Character") or (code == 32 and " " or VK_NAMES[code])
+						if code == 0x08 then
+							typeKey(0x08, false)
+						elseif code == 0x0D or code == 0x1B then
+							finishInput()
+						elseif ch and #ch == 1 then
+							activeInput.text = activeInput.text .. ch
+						end
+						return
+					end
+					if code == togKey then toggleUI() end
+				end)
+			end))
+		end)
+	end
+
+	local Window = { _theme = T }
+
+	local function newElem(tab, kind, h)
+		local el = { type = kind, d = {}, all = {}, hov = 0, height = h, baseHeight = h, tab = tab, style = {}, visible = true }
+		table.insert(tab.elems, el)
+		return el
+	end
+	local function add(el, key, kind, props, base)
+		local d = wd(kind, props, base)
+		if key then el.d[key] = d end
+		table.insert(el.all, d)
+		return d
+	end
+	local function removeElem(tab, el)
+		el.destroyed = true
+		if el.flag then Kirin._controls[el.flag] = nil; Kirin.Flags[el.flag] = nil end
+		if activeInput == el then activeInput = nil end
+		if activeCaptor == el then activeCaptor = nil end
+		local removed = {}
+		for _, d in ipairs(el.all) do removed[d] = true; kill(d) end
+		for i = #winList, 1, -1 do if removed[winList[i]] then table.remove(winList, i) end end
+		for i = #registry, 1, -1 do if removed[registry[i].d] then table.remove(registry, i) end end
+		for i, x in ipairs(tab.elems) do
+			if x == el then
+				table.remove(tab.elems, i)
+				break
+			end
+		end
+	end
+	local function bindControl(tab, el, handle)
+		el.handle = handle
+		local originalSet = handle.Set
+		if originalSet then
+			function handle:Set(value, silent)
+				if el.destroyed or not windowAlive then return self end
+				if el.type == "slider" then
+					value = finite(value, el.value)
+					value = clamp(el.min + math.floor((value - el.min) / el.step + 0.5) * el.step, el.min, el.max)
+				elseif el.type == "toggle" then value = value == true
+				elseif el.type == "input" then value = tostring(value or "")
+				elseif el.type == "keybind" then value = normalizeKey(value)
+				elseif el.type == "colorpicker" then if not colorValid(value) then return self end
+				elseif el.type == "dropdown" then
+					if el.multi then
+						local selected = {}
+						for _, option in ipairs(el.options) do
+							if type(value) == "table" then
+								if value[option] == true then selected[option] = true end
+								for _, entry in ipairs(value) do if entry == option then selected[option] = true end end
+							end
+						end
+						value = selected
+					else
+						local found = false
+						for _, option in ipairs(el.options) do if option == value then found = true end end
+						if not found then value = el.options[1] end
+					end
+				end
+				local current = handle.Get and handle:Get()
+                if sameValue(current,value) then return self end
+                local callback = el.callback
+                el.silent = silent == true
+                if silent then el.callback = nil end
+                el.setting = true
+				local ok, err = pcall(originalSet, self, value)
+                el.setting, el.silent = false, false
+                el.callback = callback
+                if not ok then report("Set: " .. tostring(err)); return self end
+                if not silent and (el.type == "keybind" or el.type == "colorpicker" or el.type == "input") then fire(el.callback,value) end
+				return self
+			end
+		end
+		if handle.SetProgress then
+			local setProgress = handle.SetProgress
+			function handle:SetProgress(value) if not el.destroyed then setProgress(self, finite(value, el.progress)) end; return self end
+			handle.Set, handle.Get = handle.SetProgress, handle.GetProgress
+		end
+		function handle:SetTitle(value)
+			if el.destroyed then return self end
+			el.fullTitle, el.fitWidth = tostring(value or ""), nil
+			if el.d.lbl then el.d.lbl.Text = el.fullTitle elseif el.d.txt then el.d.txt.Text = el.fullTitle end
+			return self
+		end
+		function handle:OnChanged(callback) el.callback = type(callback) == "function" and callback or nil; return self end
+		function handle:Destroy() if not el.destroyed then removeElem(tab, el) end end
+		if el.type == "keybind" then
+			function handle:IsEnabled() return el.enabled == true end
+			function handle:OnTriggered(callback) el.onTriggered = callback; return self end
+		end
+		if el.flag then
+			assert(not Kirin._controls[el.flag], "Astra UI: duplicate Flag '" .. tostring(el.flag) .. "'")
+			Kirin._controls[el.flag] = el
+		end
+		handle.SetValue, handle.GetValue, handle.SetText = handle.Set, handle.Get, handle.SetTitle
+        function handle:SetStyle(value) el.style=styleTable(value); el.fitWidth=nil; return self end
+        function handle:SetVisible(value) el.visible=value~=false; el.culled=false; return self end
+        return handle
+    end
+
+
+	local function lbl(el, text)
+		el.fullTitle = tostring(text)
+		add(el, "iconPlate", "Square", { Filled = true, Rounding = 6 })
+		el.icon = makeIcon(el.iconName or el.type, function(kind, props) return add(el, nil, kind, props) end)
+		add(el, "outline", "Square", { Filled = false, Thickness = 1, Rounding = 7 })
+		add(el, "topLight", "Line", { Thickness = 1 })
+		return add(el, "lbl", "Text", { Text = el.fullTitle, Size = 15, Font = F_BOLD, Outline = false })
+	end
+	local function rowBase(el)
+		add(el, "bg", "Square", { Filled = true, Rounding = 5 })
+		add(el, "bar", "Square", { Filled = true, Rounding = 1 })
+	end
+
+	function Window:Section(scfg)
+		if type(scfg) == "string" then scfg = { Title = scfg } end
+		scfg = scfg or {}
+		local stitle = scfg.Title or "Section"
+		ensureGlider()
+		table.insert(side, {
+			kind = "section",
+			txt = wd("Text", { Text = string.upper(stitle), Size = 10, Font = F_MONO, Outline = true }),
+			line = wd("Line", { Thickness = 1 }),
+		})
+		local S = { title = stitle }
+
+		function S:Tab(tcfg)
+			if type(tcfg) == "string" then tcfg = { Title = tcfg } end
+			tcfg = tcfg or {}
+			ensureGlider()
+			local tab = { title = tcfg.Title or "Tab", section = stitle, index = #tabs + 1, elems = {}, hov = 0, act = 0 }
+			tab.hbg = wd("Square", { Filled = true, Rounding = 5 })
+			tab.icon = makeIcon(tcfg.Icon or ({"navigation", "planet", "engine", "settings"})[tab.index] or "settings", wd)
+			tab.idx = wd("Text", { Text = string.format("%02d", tab.index), Size = 11, Font = F_MONO, Outline = true })
+			tab.lbl = wd("Text", { Text = tab.title, Size = 13, Font = F_BOLD, Outline = true })
+			table.insert(tabs, tab)
+			table.insert(side, { kind = "tab", tab = tab })
+			if not activeTab then activeTab = tab end
+
+			local API = {}
+            tab.style = styleTable(tcfg.Style)
+            tab.columns = math.max(1,math.min(4,math.floor(finite(tcfg.Columns,1))))
+            function API:SetStyle(value) tab.style=styleTable(value); return self end
+            function API:SetColumns(value) tab.columns=math.max(1,math.min(4,math.floor(finite(value,1)))); return self end
+            function API:GetLayoutBounds()
+                local items,total=measureTab(tab,math.max(1,W-SIDE_W-36))
+                local result={}
+                for _,p in ipairs(items) do result[#result+1]={X=p.x,Y=p.y,Width=p.w,Height=p.h} end
+                return result,total
+            end
+
+			function API:Section(name)
+				local el = newElem(tab, "header", 32)
+				add(el, "plaque", "Square", { Filled = true, Rounding = 5 })
+				add(el, "mark", "Circle", { Filled = true, Radius = 2, NumSides = 12 })
+				add(el, "txt", "Text", { Text = tostring(name), Size = 13, Font = F_BOLD, Outline = false })
+				add(el, "line", "Line", { Thickness = 1 })
+			end
+
+			function API:Toggle(c)
+				if type(c) == "string" then c = { Title = c } end
+				c = c or {}
+                assert(not c.Flag or not Kirin._controls[c.Flag], "Astra UI: duplicate Flag " .. tostring(c.Flag))
+                assert(not c.Flag or not Kirin._controls[c.Flag], "Astra UI: duplicate Flag " .. tostring(c.Flag))
+				local el = newElem(tab, "toggle", 44)
+                el.style = styleTable(c.Style)
+				el.variant = c.Type or "Switch"
+				el.value = c.Default == true
+				el.t = el.value and 1 or 0
+				el.flag, el.callback = c.Flag, c.Callback
+				el.iconName = c.Icon
+				rowBase(el)
+				if el.variant == "Checkbox" then
+					add(el, "box", "Square", { Filled = false, Thickness = 1.5, Rounding = 3 })
+					add(el, "fill", "Square", { Filled = true, Rounding = 2 })
+				else
+					add(el, "track", "Square", { Filled = true, Rounding = 9 })
+					add(el, "ring", "Circle", { Filled = false, Thickness = 1, NumSides = 24 })
+					add(el, "thumb", "Circle", { Filled = true, Radius = 6, NumSides = 20 })
+				end
+				add(el, "state", "Text", { Text = "OFF", Size = 10, Font = F_MONO, Outline = true })
+				lbl(el, c.Title or "Toggle")
+				if el.flag then Kirin.Flags[el.flag] = el.value end
+				local hd = {}
+				function hd:Set(v)
+					el.value = v and true or false
+					if el.flag then Kirin:Set(el.flag, el.value) end
+					fire(el.callback, el.value)
+				end
+				function hd:Get() return el.value end
+				function hd:OnChanged(fn) el.callback = fn end
+				function hd:SetTitle(t) el.fullTitle = tostring(t); el.fitWidth = nil; el.d.lbl.Text = el.fullTitle end
+				function hd:Destroy() removeElem(tab, el) end
+				return bindControl(tab, el, hd)
+			end
+
+			function API:Slider(c, pMin, pMax, pDef, pCb)
+				if type(c) == "string" then c = { Title = c, Min = pMin, Max = pMax, Default = pDef, Callback = pCb } end
+				c = c or {}
+				local el = newElem(tab, "slider", 60)
+                el.style = styleTable(c.Style)
+				el.min, el.max = finite(c.Min, 0), finite(c.Max, 100)
+				if el.min > el.max then el.min, el.max = el.max, el.min end
+				el.step = finite(c.Step, 1); if el.step <= 0 then el.step = 1 end
+				el.value = clamp(finite(c.Default, el.min), el.min, el.max)
+				el.suffix = c.Suffix or ""
+				el.flag, el.callback = c.Flag, c.Callback
+				el.iconName = c.Icon
+				el.sliding = false
+				el.disp = (el.value - el.min) / math.max(el.max - el.min, 1e-9)
+				rowBase(el)
+				add(el, "pill", "Square", { Filled = true, Rounding = 4 })
+				add(el, "val", "Text", { Text = "", Size = 11, Font = F_MONO, Outline = true })
+				add(el, "track", "Square", { Filled = true, Rounding = 2 })
+				add(el, "fill", "Square", { Filled = true, Rounding = 2 })
+				el.ticks = {}
+				for i = 1, 5 do el.ticks[i] = add(el, nil, "Line", { Thickness = 1 }) end
+				add(el, "ring", "Circle", { Filled = false, Thickness = 1, NumSides = 24 })
+				add(el, "thumb", "Circle", { Filled = true, Radius = 5, NumSides = 20 })
+				lbl(el, c.Title or "Slider")
+				if el.flag then Kirin.Flags[el.flag] = el.value end
+				local hd = {}
+				function hd:Set(v)
+					el.value = clamp(v, el.min, el.max)
+					if el.flag then Kirin:Set(el.flag, el.value) end
+					fire(el.callback, el.value)
+				end
+				function hd:Get() return el.value end
+				function hd:OnChanged(fn) el.callback = fn end
+				function hd:Destroy() removeElem(tab, el) end
+				return bindControl(tab, el, hd)
+			end
+
+			function API:Button(c)
+				if type(c) == "string" then c = { Title = c } end
+				c = c or {}
+				local el = newElem(tab, "button", 44)
+                el.style = styleTable(c.Style)
+				el.iconName = c.Icon or "button"
+				el.danger = c.Style == "danger"
+				el.primary = c.Style == "primary"
+				el.callback = c.Callback
+				el.flashT, el.flashX = 0, 0
+				add(el, "bg", "Square", { Filled = true, Rounding = 5 })
+				add(el, "flash", "Square", { Filled = true, Rounding = 5 })
+				add(el, "bar", "Square", { Filled = true, Rounding = 1 })
+				add(el, "action", "Square", { Filled = true, Rounding = 5 })
+				add(el, "arrow", "Text", { Text = ">", Size = 13, Font = F_MONO, Outline = true })
+				lbl(el, c.Title or "Button")
+				local hd = {}
+				function hd:SetTitle(t) el.fullTitle = tostring(t); el.fitWidth = nil; el.d.lbl.Text = el.fullTitle end
+				function hd:Fire() fire(el.callback) end
+				function hd:Destroy() removeElem(tab, el) end
+				return bindControl(tab, el, hd)
+			end
+
+			function API:Dropdown(c)
+				c = c or {}
+                assert(not c.Flag or not Kirin._controls[c.Flag], "Astra UI: duplicate Flag " .. tostring(c.Flag))
+				local el = newElem(tab, "dropdown", 62)
+                el.style = styleTable(c.Style)
+				el.options = {}
+				for _, option in ipairs(type(c.Options) == "table" and c.Options or { "Option A", "Option B" }) do el.options[#el.options + 1] = tostring(option) end
+				el.multi = c.Multi == true
+				if el.multi then
+					el.selected = {}
+					if type(c.Default) == "table" then
+						for k, v in pairs(c.Default) do
+							if type(k) == "number" then el.selected[v] = true elseif v then el.selected[k] = true end
+						end
+					end
+				else
+					el.selected = el.options[1]
+                    for _, option in ipairs(el.options) do if option == c.Default then el.selected = option end end
+				end
+				if el.multi then
+                    local filtered = {}
+                    for _, option in ipairs(el.options) do if el.selected[option] then filtered[option] = true end end
+                    el.selected = filtered
+                end
+                el.open, el.o = false, 0
+                el.flag, el.callback = c.Flag, c.Callback
+                el.iconName = c.Icon
+                rowBase(el)
+                add(el, "val", "Text", { Text = "", Size = 11, Font = F_MONO, Outline = true })
+				add(el, "chev", "Text", { Text = "v", Size = 11, Font = F_MONO, Outline = true })
+				lbl(el, c.Title or "Dropdown")
+				add(el, "list", "Square", { Filled = true, Rounding = 5 })
+				el.opts = {}
+				for i = 1, #el.options do
+					el.opts[i] = {
+						hov = 0,
+						bg = add(el, nil, "Square", { Filled = true, Rounding = 4 }),
+						bar = add(el, nil, "Square", { Filled = true, Rounding = 1 }),
+						txt = add(el, nil, "Text", { Text = "", Size = 12, Font = F_UI, Outline = true }),
+					}
+				end
+				if el.flag then Kirin.Flags[el.flag] = el.selected end
+				local hd = {}
+				function hd:Set(v)
+					el.selected = v
+					if el.flag then Kirin:Set(el.flag, v) end
+					fire(el.callback, v)
+				end
+				function hd:Get() return el.selected end
+				function hd:Destroy() removeElem(tab, el) end
+				return bindControl(tab, el, hd)
+			end
+
+			function API:Keybind(c)
+				c = c or {}
+                assert(not c.Flag or not Kirin._controls[c.Flag], "Astra UI: duplicate Flag " .. tostring(c.Flag))
+				local el = newElem(tab, "keybind", 44)
+                el.style = styleTable(c.Style)
+				el.key = normalizeKey(c.Default or 0)
+				el.mode = string.lower(tostring(c.Mode or "toggle"))
+				if el.mode ~= "hold" and el.mode ~= "always" and el.mode ~= "click" then el.mode = "toggle" end
+				el.enabled, el.keyDown = false, false
+				el.onTriggered = c.OnTriggered
+				el.listening = false
+				el.flag, el.callback = c.Flag, c.Callback
+				el.iconName = c.Icon
+				rowBase(el)
+				add(el, "mode", "Text", { Text = "", Size = 10, Font = F_MONO, Outline = true })
+				add(el, "badge", "Square", { Filled = true, Rounding = 4 })
+				add(el, "badgeOutline", "Square", { Filled = false, Thickness = 1, Rounding = 4 })
+				add(el, "key", "Text", { Text = "", Size = 11, Font = F_MONO, Center = true, Outline = true })
+				lbl(el, c.Title or "Keybind")
+				if el.flag then Kirin.Flags[el.flag] = el.key end
+				local hd = {}
+				function hd:Set(k)
+					el.key = k
+					if el.flag then Kirin:Set(el.flag, k) end
+				end
+				function hd:Get() return el.key end
+				function hd:Destroy() removeElem(tab, el) end
+				return bindControl(tab, el, hd)
+			end
+
+			function API:Colorpicker(c)
+				c = c or {}
+                assert(not c.Flag or not Kirin._controls[c.Flag], "Astra UI: duplicate Flag " .. tostring(c.Flag))
+				local el = newElem(tab, "colorpicker", 44)
+                el.style = styleTable(c.Style)
+				el.color = colorValid(c.Default) and c.Default or T.Accent
+				el.presets = type(c.Presets) == "table" and c.Presets or {
+					Color3.fromRGB(92, 214, 255), Color3.fromRGB(204, 136, 255), Color3.fromRGB(255, 168, 72),
+					Color3.fromRGB(84, 245, 178), Color3.fromRGB(255, 92, 104), Color3.fromRGB(255, 226, 120),
+					Color3.fromRGB(255, 255, 255), Color3.fromRGB(40, 46, 70),
+				}
+				local presets = {}
+                for _, color in ipairs(el.presets) do if colorValid(color) then presets[#presets + 1] = color end end
+                if #presets == 0 then presets[1] = el.color end
+                el.presets = presets
+                el.open, el.o = false, 0
+                el.flag, el.callback = c.Flag, c.Callback
+                el.iconName = c.Icon
+                rowBase(el)
+                add(el, "hex", "Text", { Text = "", Size = 10, Font = F_MONO, Outline = true })
+				add(el, "swOut", "Square", { Filled = false, Thickness = 1, Rounding = 4 })
+				add(el, "sw", "Square", { Filled = true, Rounding = 3 })
+				lbl(el, c.Title or "Color")
+				el.tiles = {}
+				for i = 1, #el.presets do
+					el.tiles[i] = {
+						sq = add(el, nil, "Square", { Filled = true, Rounding = 4 }),
+						ol = add(el, nil, "Square", { Filled = false, Thickness = 1, Rounding = 5 }),
+					}
+				end
+				if el.flag then Kirin.Flags[el.flag] = el.color end
+				local hd = {}
+				function hd:Set(col)
+					el.color = col
+					if el.flag then Kirin:Set(el.flag, col) end
+				end
+				function hd:Get() return el.color end
+				function hd:Destroy() removeElem(tab, el) end
+				return bindControl(tab, el, hd)
+			end
+
+			function API:Input(c)
+				c = c or {}
+                assert(not c.Flag or not Kirin._controls[c.Flag], "Astra UI: duplicate Flag " .. tostring(c.Flag))
+				local el = newElem(tab, "input", 76)
+                el.style = styleTable(c.Style)
+				el.text = tostring(c.Default or "")
+				el.placeholder = tostring(c.Placeholder or "type here")
+				el.focused, el.f = false, 0
+				el.flag, el.callback = c.Flag, c.Callback
+				el.iconName = c.Icon
+				rowBase(el)
+				add(el, "box", "Square", { Filled = true, Rounding = 4 })
+				add(el, "boxOl", "Square", { Filled = false, Thickness = 1, Rounding = 4 })
+				add(el, "txt", "Text", { Text = "", Size = 12, Font = F_UI, Outline = true })
+				lbl(el, c.Title or "Input")
+				if el.flag then Kirin.Flags[el.flag] = el.text end
+				local hd = {}
+				function hd:Set(s)
+					el.text = tostring(s)
+					if el.flag then Kirin:Set(el.flag, el.text) end
+				end
+				function hd:Get() return el.text end
+				function hd:Destroy() removeElem(tab, el) end
+				return bindControl(tab, el, hd)
+			end
+
+			function API:Progressbar(c)
+				c = c or {}
+				local el = newElem(tab, "progressbar", 54)
+                el.style = styleTable(c.Style)
+				el.progress = clamp(finite(c.Default, 0), 0, 1)
+				el.disp = el.progress
+				rowBase(el)
+				add(el, "pct", "Text", { Text = "0%", Size = 11, Font = F_MONO, Outline = true })
+				add(el, "track", "Square", { Filled = true, Rounding = 2 })
+				add(el, "fill", "Square", { Filled = true, Rounding = 2 })
+				add(el, "shine", "Square", { Filled = true, Rounding = 2 })
+				lbl(el, c.Title or "Progress")
+				local hd = {}
+				function hd:SetProgress(p) el.progress = clamp(p, 0, 1) end
+				function hd:GetProgress() return el.progress end
+				function hd:Destroy() removeElem(tab, el) end
+				return bindControl(tab, el, hd)
+			end
+
+			function API:Paragraph(c)
+				if type(c) == "string" then c = { Text = c } end
+				c = c or {}
+				local maxC = math.max(30, math.floor((normalW - SIDE_W - 60) / 6.4))
+				local text, lines = wrapText(tostring(c.Text or c.Title or ""), maxC)
+				local el = newElem(tab, "paragraph", lines * 15 + 8)
+                el.style = styleTable(c.Style)
+                el.fullTitle = tostring(c.Text or c.Title or "")
+				add(el, "txt", "Text", { Text = text, Size = 12, Font = F_UI, Outline = true })
+				local hd = {}
+				function hd:Destroy() removeElem(tab, el) end
+				return bindControl(tab, el, hd)
+			end
+
+			function API:Divider()
+				local el = newElem(tab, "divider", 14)
+				add(el, "l1", "Line", { Thickness = 1 })
+				add(el, "l2", "Line", { Thickness = 1 })
+				add(el, "dot", "Circle", { Filled = false, Thickness = 1, Radius = 3, NumSides = 4 })
+			end
+
+			function API:Space(px)
+				newElem(tab, "space", px or 8)
+			end
+
+            API.AddToggle,API.AddSlider,API.AddButton=API.Toggle,API.Slider,API.Button
+            API.AddDropdown,API.AddKeybind,API.AddColorPicker=API.Dropdown,API.Keybind,API.Colorpicker
+            API.AddInput,API.AddProgressBar=API.Input,API.Progressbar
+            API.AddLabel,API.AddDivider=API.Paragraph,API.Divider
+            function API:Select()
+                if activeTab ~= tab then hideTab(activeTab); activeTab = tab end
+                scrollY, scrollTarget, scrollDragging = 0, 0, false
+                contentSlide, typeT, typeStart = 1, 0, clock()
+            end
+			return API
+		end
+
+		return S
+	end
+
+	function Window:SetLayout(value) layout=styleTable(value); return self end
+    local defaultSection
+    function Window:AddTab(options)
+        if not defaultSection then defaultSection=self:Section("Pages") end
+        return defaultSection:Tab(options)
+    end
+    function Window:SetIcon(src)
+		background(function()
+			local d = fetchImage(src)
+			if d and windowAlive then
+				iconData = d
+				miniImgSet = false
+			end
+		end)
+	end
+	function Window:Minimize() minimized = true end
+	function Window:Restore()
+		minimized = false
+		visible = true
+	end
+	function Window:Toggle() toggleUI() end
+	function Window:IsPointerOver(mx, my)
+        if not windowAlive or not visible then return false end
+        if minimized then return (mx - miniX) ^ 2 + (my - miniY) ^ 2 <= 42 ^ 2 end
+        return inRect(mx, my, winX - 10, winY - 10, W + 20, H + 20)
+    end
+    function Window:SetToggleKey(vk) togKey = normalizeKey(vk) end
+	function Window:ToggleExpand()
+		expanded = not expanded
+		if expanded then
+			tW, tH = math.min(MAX_W, 790), math.min(MAX_H, 570)
+		else
+			tW, tH = normalW, normalH
+		end
+	end
+	function Window:SetSize(nw, nh)
+		normalW = clamp(finite(nw, normalW), MIN_W, MAX_W)
+		normalH = clamp(finite(nh, normalH), MIN_H, MAX_H)
+		tW, tH = normalW, normalH
+		expanded = false
+	end
+	function Window:SetVisualFX(enabled)
+        gardenEnabled = enabled ~= false
+        gardenDirty = true
+        if not gardenEnabled then for _, d in ipairs(gardenDraws) do d.Visible = false end end
+    end
+    function Window:GetVisualFX() return gardenEnabled end
+    function Window:_applyTheme(nt)
+		T = nt
+		gardenDirty = true
+		Window._theme = nt
+	end
+
+	function Window:Watermark(c)
+		c = c or {}
+		local label = c.Title or title
+		local bg = newDraw("Square", { Filled = true, Rounding = 5, Visible = true })
+		local ol = newDraw("Square", { Filled = false, Thickness = 1, Rounding = 5, Visible = true })
+		local acc = newDraw("Line", { Thickness = 1, Visible = true })
+		local dot = newDraw("Circle", { Filled = true, NumSides = 12, Radius = 3, Visible = true })
+		local nm = newDraw("Text", { Text = label, Size = 12, Font = F_BOLD, Outline = true, Visible = true })
+		local info = newDraw("Text", { Text = "", Size = 11, Font = F_MONO, Outline = true, Visible = true })
+		local list = { bg, ol, acc, dot, nm, info }
+		local shownWM = true
+		local dateAt, dateText = -1, ""
+		local conn = connectFrame(function()
+			if not Kirin._alive or not windowAlive then return end
+			pcall(function()
+				local now = clock()
+				if math.floor(now) ~= dateAt then
+					dateAt = math.floor(now)
+					local ok, value = pcall(os.date, "%H:%M:%S")
+					dateText = (ok and type(value) == "string") and value or ("T+" .. math.floor(now - startT) .. "s")
+				end
+				local tstr = dateText
+				info.Text = tostring(fps) .. " fps  " .. tstr
+				local x, y = 14, 14
+				local nw = textW(nm, 12, false)
+				local iw = textW(info, 11, true)
+				local ww = 26 + nw + 12 + iw + 12
+				bg.Position = V(x, y); bg.Size = V(ww, 24); bg.Color = T.BgAlt
+				ol.Position = V(x, y); ol.Size = V(ww, 24); ol.Color = T.Border
+				acc.From = V(x + 8, y + 23); acc.To = V(x + 26 + nw, y + 23); acc.Color = T.Accent
+				dot.Position = V(x + 14, y + 12); dot.Radius = 2.4 + (math.sin(now * 3) + 1) * 0.6; dot.Color = T.Accent
+				nm.Position = V(x + 24, y + 5); nm.Color = T.Text
+				info.Position = V(x + 24 + nw + 12, y + 6); info.Color = T.TextSub
+				for _, d in ipairs(list) do d.Visible = shownWM end
+			end)
+		end)
+		local wm = { list = list, conn = conn }
+		table.insert(watermarks, wm)
+		local hd = {}
+		function hd:SetVisible(v) shownWM = v and true or false end
+		function hd:SetTitle(t) nm.Text = tostring(t) end
+		function hd:Destroy()
+			pcall(function() conn:Disconnect() end)
+			for _, d in ipairs(list) do kill(d) end
+		end
+		return hd
+	end
+
+	function Window:IsAlive() return windowAlive and Kirin._alive end
+	function Window:Destroy()
+		if not windowAlive then return end
+		windowAlive = false
+		for _, tab in ipairs(tabs) do
+			for _, el in ipairs(tab.elems) do
+				el.destroyed = true
+				if el.flag then Kirin._controls[el.flag] = nil; Kirin.Flags[el.flag] = nil end
+			end
+		end
+		for i = #Kirin._windows, 1, -1 do if Kirin._windows[i] == Window then table.remove(Kirin._windows, i) end end
+		for _, cn in ipairs(conns) do pcall(function() cn:Disconnect() end) end
+		for _, wm in ipairs(watermarks) do
+			pcall(function() wm.conn:Disconnect() end)
+			for _, d in ipairs(wm.list) do kill(d) end
+		end
+		for _, d in ipairs(winList) do kill(d) end
+		for _, d in ipairs(miniList) do kill(d) end
+		for _, n in ipairs(notifs) do
+			for _, d in pairs(n.d) do kill(d) end
+		end
+		notifs = {}
+		if notifConn then
+			pcall(function() notifConn:Disconnect() end)
+			notifConn = nil
+		end
+	end
+
+	if cfg.Icon then Window:SetIcon(cfg.Icon) end
+	table.insert(Kirin._windows, Window)
+	return Window
+end
+
+function Kirin:Destroy()
+	for i = #self._windows, 1, -1 do pcall(function() self._windows[i]:Destroy() end) end
+	self._windows, self._controls, self._watchers = {}, {}, {}
+	self._alive = false
+	runtimeAlive = false
+end
+
+_G.__AstraCleanup = function() Kirin:Destroy() end
+_G.Kirin = Kirin
+_G.AstraUI = Kirin
+if typeOf(getgenv) == "function" then pcall(function() getgenv().Kirin = Kirin end) end
+
+return Kirin
