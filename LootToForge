@@ -14,7 +14,7 @@ if type(hostSpawn) ~= "function" or type(hostWait) ~= "function" or type(clock) 
     or not coroutine or type(coroutine.create) ~= "function"
     or type(coroutine.resume) ~= "function" or type(coroutine.yield) ~= "function"
     or type(coroutine.running) ~= "function" or type(coroutine.status) ~= "function" then
-    report("Entorno incompatible: se requieren Drawing.new, spawn/wait, coroutines y un reloj.")
+    report("Unsupported environment: Drawing.new, spawn/wait, coroutines, and a clock are required.")
     return
 end
 if type(_G.MatchaLootForgeHubCleanup) == "function" then pcall(_G.MatchaLootForgeHubCleanup) end
@@ -58,7 +58,7 @@ local function spawnWorker(fn, mode)
                     if not ok then failed, failure = true, signal; break end
                     if coroutine.status(child) == "dead" then finished = true; break end
                     if signal ~= WAIT then
-                        failed, failure = true, "Espera externa no compatible en tarea administrada"
+                        failed, failure = true, "External wait is not supported in a managed task"
                         break
                     end
                     local deadline = clock() + delay
@@ -73,10 +73,10 @@ local function spawnWorker(fn, mode)
                 if finished then break end
                 if failed then
                     failures = failures + 1
-                    report("Tarea " .. (mode or "general") .. ": " .. tostring(failure))
+                    report("Task " .. (mode or "general") .. ": " .. tostring(failure))
                     if failures >= 3 then
                         if mode then STATE[mode] = false end
-                        report("Tarea detenida tras 3 errores; revisa la compatibilidad del juego.")
+                        report("Task stopped after 3 errors; check game compatibility.")
                         break
                     end
                     hostWait(1)
@@ -113,7 +113,7 @@ local function main()
         Non = loader() or _G.Kirin
     end
 
-    assert(type(Non) == "table" and type(Non.CreateWindow) == "function", "UI incompatible o no se pudo cargar desde GitHub")
+    assert(type(Non) == "table" and type(Non.CreateWindow) == "function", "UI is incompatible or could not be loaded from GitHub")
 
     local Players = game:GetService("Players")
     local Workspace = game:GetService("Workspace")
@@ -122,7 +122,7 @@ local function main()
     local lp = Players.LocalPlayer
     local playerDeadline = clock() + 15
     while not lp and clock() < playerDeadline do task.wait(0.1); lp = Players.LocalPlayer end
-    assert(lp, "LocalPlayer no disponible despues de 15 segundos")
+    assert(lp, "LocalPlayer is unavailable after 15 seconds")
     local remotes = ReplicatedStorage:FindFirstChild("Remote")
     Window = nil
 
@@ -525,8 +525,9 @@ local function main()
         local attackEnemyBE = attackFolder and attackFolder:FindFirstChild("AttackEnemyBE")
         local dummyHitBE = attackFolder and attackFolder:FindFirstChild("DummyHitBE")
         local atkOnceBE = attackFolder and attackFolder:FindFirstChild("ATKOnceBE")
-        local killRE = attackFolder and attackFolder:FindFirstChild("KillEnemyRE")
-        local useAtkRE = attackFolder and attackFolder:FindFirstChild("UseAnyATKRE")
+        local serverAttackFolder = remotes and remotes:FindFirstChild("Attack_Server")
+        local killRE = serverAttackFolder and serverAttackFolder:FindFirstChild("KillEnemyRE")
+        local useAtkRE = serverAttackFolder and serverAttackFolder:FindFirstChild("UseAnyATKRE")
 
         local EnemyCTRL, HPCTRL, StageUtils = nil, nil, nil
         local count = 0
@@ -538,11 +539,16 @@ local function main()
                 local hp = enemy:FindFirstChild("HPValue") or enemy:FindFirstChild("HPValue", true)
                 local isDead = enemy:GetAttribute("Dead")
                 if count >= 20 then break end
-                if not isDead and (not hp or (tonumber(safeGet(hp, "Value")) or 0) > 0) then
+                local currentHP = hp and tonumber(safeGet(hp, "Value"))
+                local inconsistentDeath = isDead == true and currentHP and currentHP > 0
+                if not isDead or inconsistentDeath then
+                    if inconsistentDeath then
+                        pcall(function() enemy:SetAttribute("Dead", false) end)
+                    end
                     table.insert(enemyNames, enemy.Name)
                     count = count + 1
 
-                    if enemyHitBE then
+                    if enemyHitBE and type(safeGet(enemyHitBE, "Fire")) == "function" then
                         pcall(function()
                             enemyHitBE:Fire(enemy.Name, 999999999999, {
                                 SkillID = "Player_ATK_1",
@@ -582,14 +588,11 @@ local function main()
 
                     pcall(function()
                         if hp then hp.Value = 0 end
-                        local hum = enemy:FindFirstChild("Humanoid")
-                        if hum then hum.Health = 0 end
-                        enemy:SetAttribute("Dead", true)
                     end)
                 end
             end
 
-            if #enemyNames > 0 and attackEnemyBE then
+            if #enemyNames > 0 and attackEnemyBE and type(safeGet(attackEnemyBE, "Fire")) == "function" then
                 pcall(function()
                     attackEnemyBE:Fire(enemyNames, {
                         Attacker = lp,
@@ -606,7 +609,7 @@ local function main()
                 if count >= 20 then break end
                 if hp and (tonumber(safeGet(hp, "Value")) or 0) > 0 then
                     count = count + 1
-                    if dummyHitBE then
+                    if dummyHitBE and type(safeGet(dummyHitBE, "Fire")) == "function" then
                         pcall(function()
                             dummyHitBE:Fire(obj, 999999999999, {
                                 SkillID = "Player_ATK_1",
@@ -626,7 +629,7 @@ local function main()
             end
         end
 
-        if count > 0 and atkOnceBE then
+        if count > 0 and atkOnceBE and type(safeGet(atkOnceBE, "Fire")) == "function" then
             pcall(function() atkOnceBE:Fire() end)
         end
 
@@ -635,7 +638,7 @@ local function main()
         end)
 
         pcall(function()
-            if killRE and #enemyNames > 0 then
+            if killRE and #enemyNames > 0 and not STATE.TowerFarm then
                 for _, name in ipairs(enemyNames) do
                     killRE:FireServer(name)
                 end
@@ -646,7 +649,8 @@ local function main()
             if useAtkRE then
                 local wType = lp:GetAttribute("WeaponType") or "Katana"
                 local prefix = (wType == "Great") and "G_ATK_" or "K_ATK_"
-                useAtkRE:FireServer(prefix .. "1", workspace:GetServerTimeNow())
+                local serverTime = Workspace:GetAttribute("ServerTime")
+                if type(serverTime) == "number" then useAtkRE:FireServer(prefix .. "1", serverTime) end
             end
         end)
 
@@ -929,7 +933,7 @@ local function main()
         end)
         local deadline = clock() + 5
         while not call.done and clock() < deadline do task.wait(0.05) end
-        if not call.done then report("Tiempo agotado en " .. tostring(remote)); return false end
+        if not call.done then report("Timed out on " .. tostring(remote)); return false end
         return call.ok, call.result
     end
 
@@ -957,7 +961,7 @@ local function main()
         task.spawn(function()
             local ok, err = pcall(function()
                 local r = ReplicatedStorage:FindFirstChild("Remote")
-                if not r then report("Remote no disponible"); return end
+                if not r then report("Remote is unavailable"); return end
                 local codeFolder = r:FindFirstChild("Code")
                 local codeRF = codeFolder and codeFolder:FindFirstChild("TryUseCodeRF")
                 if codeRF then
@@ -986,9 +990,22 @@ local function main()
         end)
     end
 
+    local minimizedIconPath
+    if type(base64decode) == "function" and type(writefile) == "function" then
+        local ok, err = pcall(function()
+            local iconBytes = base64decode("iVBORw0KGgoAAAANSUhEUgAAAgAAAAIACAMAAADDpiTIAAAABGdBTUEAALGPC/xhBQAAAAFzUkdCAK7OHOkAAABdUExURQAAAECr7EC29UEyj0FCm0Cp6kE5lEBwvkBpuEFJoECv70FVqkB2w0Eoh0DA/EFDnEE6lUFjtUEyj0FXrEFNpEC080C7+UFvvkCu70B9yUCJ0kCa30Co6kCS2UCh5fPXxA4AAAANdFJOUwB90thUT6sUMICr1LzwZiI3AAAgAElEQVR42u1diWKqMBCUM8HjeVdta///Mx9XQi4gCVeCOyBaKyHZ2Z3doOJmAwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIC3QDgJgmCbI8zxVWzC/I8gSBIE1lkxcJIEOef/OhEWjgB+sDrqc+b/GSAEJ1iL3JtSzzkB2M9z7sOvf4MQBqADnmq+ddxLPgAy4GHg/xsVW5ABf8jfjkx+BcgEPmD0yGfwFYB96UmUpDiNElSnUb6+/lUnUsiZFLxMrOQ5/9+0+PhaIE+tmoVV7gyznlObSvelcX1qHijPopjPp74KP5jcZlPqvjSizxOB3LwD7fu1nfB0SrL9+jcrgg8jfzTxnEAK0Ozsf9KMMK+pxrZuuB3RCdDkNV/rMDCQP0QJ8Cjsj5n2v3IYvX7dHpBs7xNH0DYZ6J6D2c+r02KakmCMUC1K+YPyvWKdYnfFkwEc3OdQ0S9rHxgW+19a09P+t5BW6gFoxvmUVS4Y0MGSepMjdhfAK/SAvKSmxpp+tXin1brm/wrNqNfKNWvzgMa4s0ysvozPrlqyn8c9HmaX1tngqhJ/WNPyVQXo9Evz4K4hA4R9g/bzhsc5C4m3ygP/+5esKvip2folQMP2+hJQ7rLF/e5p0Hal+uNN1ZJQbYV1JIFqdJS+5q5tbQ9mtpHelWuuPRMguX897Y58vqkyktLVw1XQ/8XhH71rW2Xcw/AuPtfLFHdfQFkQ5uJk0m6BbTDFWRocqkYerIJ+KXj/9ZFfnEQp3vcv3vmnrJWnUZLq2xahBmHcfXl3D6Q535eqf+3dm/IzvIFK/fAa6DdAefpMS13LT2LfexsUjs66QB382v3LS75pc3Ki6L7PM4EgNKPeZiqNyq/hmPhAGLDBr9+9OT6+r/AAfyWAN/C/5vbvS1L9wW/kJuRoLUmFOXRZCyShykv+tTRw3871ySOFB2w9Fv8WGRYjfxzrFh/Z0ojkf8qarzP054zBYB0SgLa6sj9uaKFge/8aE/ft3OditmuQgECLhYl0tfigga/sFz4cei8BSahVU02YVU0LvBb/XMh8nkuApP73+sZsZkirOOCPydzoyjzB3YoeLvi1bakMuPuo/ne6iPTPJqz1NF9Br+CZ4v+X/rJuyHargD/vCVXqf/+6K1Sg2mznDC1FKrhXIX/nn1is6G+VgDux2d2jHFCo//2r6TmjAtVAFgitMhVwXSGxzj1RP3SA/UoCWNe8+/KWUHJnA0xMuHdyCm4ZWWL6cRc7dp85N2lIALVj5QVe5IDgzvVaXJb81mMStnaLLluHjIzYUCoWD94TROHXV4d9l/7Sa6ECXfw79lWcrZC23M8BSZd1v1z4znOPC7gVY4nYPS/kn678cnflK+9JeG/l/353SgMQZ8kcbn80DIU8+WWfyc2l3Fq4ANc5ciuzlEtnXKuOll0r752uAhPS2dqULkZ/vwpMaeXqk0z8x5t0JLVRAJerwOB+rx2VbBo4eNWj4N6OUc1cXyk4DJ/cMZ5aXyFJWGN+uewAKGx6SsSUJIStk29joe2dq1hIHijWcKRPJhQfVuvCsy8yMGPRAs6eC0yed6GrFO5e7ih5tjIztNPFdW7aW2eM9Ez6qkB2J2fngUmHnDpcuJYiMHIa6A97QQRwbxXIOqbb6V8RSY5/iCFp52prQ74R97WJkL4DOKoArfw/PTh3HVgyo4h8c/JLJL4rQKuO+nGJIxwO9wBr8nulxgMH2M4ymZpUBJ5DPAB3lXta8NoBUOhp9u8VgaeGBwwn33cHaOXfryvctU4Hutw4GYP8wtM8doAydJ7y8vTuy6zBUzWOVg9ANfvPEZZOUoUXO+YA+FkqZWkpduvjpa6TsJZ94aaYp7Ps3wffOmslNHxuOumZtBz3ZxXzzNbPC5yi8FmPoLmVW96bUZ7263/epdfb3DrPBOEnj8A1/mv6/Zb/Jg0oNZrxABSErNNPnwGSZ1tXXND/ygYCfP6lg4QfCh1bUpf8IX36/mQ1QnMrtnzvD+pA2NEh42I2FpgqxevLGeGQHc+T3icM+/dnk/HE5KfektAoLnoRSq/onC5vBQVwx7pFxpTD/+n7NQ3RVqUA+biEJ+7qaFZFfXnFWPLTNljap7uuF+3rFv8yVnB9++A5GhTXOpHNlmwMakB3ZoFbNf+bFUDygLsl90jHu7ZGfdm6zf9KfuFkoAb8tl89Dj/NBECycwL8u+0Bv92XDgwNBQCJL0cuG2hFv3GVTEC+2m6J0Q6hQ/z/isuqfuMsUY2wddEhv0gA5SvZhvtyevh81vuUN0c0Nql7w7v/yn7aJvk1KPg0rxzI0EmshvpOtT05F0gcMc2vFB6/q/tpo0Qz/PUvGho8JQUIeqW2NnZ978oJgN/1818Jdo/y/5pc5kSRVcJ+yeB2cGISuP39lflf5W+cYsVImTEb/h5Z0Zph2CS//D5OmDlQ2WKlv3Hb7gG/xhcMRmHRFs9n0B9r/GEdmARWTilgtb9wqxxtwb55xtsS8plmevhE4nEdyACVHwvRsOJfOE4Uw7XSu+CXcK8/b672YVYHhHariIftZsUIFAP+Q6NISV/cSAIQummOVfM/kssjVR4xNvbySqvy43Dtv28ejlD0qNrAxk6zuKXR3wfyX5Y9xuz1q0hiLADLS+32E/nPJ4ND/d4qcSJzl1miAMCbD0AyrAywS5xb50rAchx/3LLmCaAw9D9x6ImJ3aS9ewMH/1ofcMIC4O+zJgBd4venOxdM/n7/LIrIrXMVQFDyz3nlJxQAlA8piPUYwX+S2X7/thqyIR5vaQHAf1KX/vDH8F/rnzkl5RRC3FHDdcJf832mng1L/AebD4IckjpJAIUy/TrCGThXAQR/Erabj8LWwgIo/FNA46Njzhkb/dn48crOB8kSkPQ7jSwAGrEc2uw0t/vjzYdBDsu/0NhqfzqJM3BOABKrcaxuLsgZ4LfXCgF5GXvToBLJ1l5abcNPLwBsdDBQxb9O4tw6F23yUH7QJzoAMqkDE1v+E9NMs8S4k81HItG3hJL/H43CCf04V25tIQG0myI00H8tJt1LAAnMANrD80ctAWr+dXTTwXQb5qPM12bziTOAJhoqE/zUi1oCgj/uRfVLE+1o46yduCAAP/WteoA+1wGKCdFPbYvaHoGKf2owMyVHhPjG2su/CdC4cL1JPph/SQJ+5HgIOMkki5ZsbjlDK1tfQgB4KdtuPhpbwRwStYFkMW2rybsun27DnwJFZ+r1B3+2A6DGFH+1YbggDX5qi3GrFv9YMHW+Lv85sLpHpF9/P8HmwxGIJHEmqf/Lv0Iv/lH4Q01NdsUOCUDVuzf6dAdAby7CeQkIqueIteqX6GXNLWPqes/AAQEgA6rvks3HI/lhUJol4PW/pp26wlZXWQRb/zjwTYAfAVvgX2EVIgHBjwpbc7eqsLzayp3CQH9drHEIWhxDn3+s2BODAPgiAe+h/KPwp8Wr3BIAqADqqaDCMEP4V+283YAAuDwVFNP1IP4DFwsARVoCAWg1zXtk/l2otrb1uOgtBOYZ27z5Vfy7WDX5T0RDO1EAlInuzfUKBIAvj3pc4Eeff5H+twvJNij68q425QIC0CUBb9v4xxXr3OLE+dZmZHW3QADEsGUXkUPd+EfvH2n/twunW/D7XXTlh2yquS6AxocYtMKf+vy/xf3fToRaII4IBECwz/unY9Hlfys38w4c8fDKLYu1vAHncujWpmmMRLa6Rdy22ZVa242zLcm7QTmmADhXSECLCxjwz+1q4jtTV7n88N7wOQBZAqh5fhr+fkw4DN4C8r2/kUOjYwBngVvCV4HAiv8fpwJN8k0oAfttZMh/otrZlffb92LHIAPo8p8M4d+VOMO2Xv05FcB2IP94iHhABlic/30L/7oSjr5d5n8j9u4bKOfD91tN//cg/vfOjK9IT9/MChlAkb6/hSVf98iE/2/ByHt36qygGmCzhc+CiuZRRjAyEBDWvOX226E6m3hl7djfeyCdT//fsgB86ys4buzLGNmhIEO8sH1DCSix9837QLEGBi0IDuQY/0WK+36zXgonARrbSMRXT3wnJh4kNOAY/5v9d453uZYbyABN+v/+bozzbqxkxH/VQMk7acAtjf2u/ZNsIAMw/L8b49DVIIAThvnGyG5ZGNdOTQQAMgAt/6hZeA/Qn8AljF2pfV2LMOqk5AbU14FBSXuz8fEdmJhWFP+3c/xXJQADOAtE44IKAPs4MG1CgHMZlhne28kOLln+fUtukBjy//7mDeycebHooVACkPSvAl5b/AuuDpNAZVBQ4yBru7rKP5QAutyZBYe6DReN64GPuiL/wRr5hxJAV/4NQqPFh5wUVygBdEo3s/LPJ/7rEuBFNx9eAtTx8JJWg/IP0za4m6OW3bPsvz68BEClNV4KFzDk/yXR76xh6x6+SKc/uQRIaBwI9JtEb0JZJ7uXG1f5R4y3FusnlwABSxjnAolVI2wbibtO/+KWz3UAIv9kaR7sDT69sRfsWS/Yba9nRv2xNSB+fau5M4mJxol84X+zf3E9fSUfy38xepUDJCb8v0gbvvAvOcCHfiAcqck3MwhWN7J3uq4m7loHwOtDBWBP7UDX8mZCXvJSNfHtNv+557+4EX+sALxE+gprmFREMv/l6jb/hWqx9H/qLDBgBYDYwqwgCqpduDa+X67zX7gt7Xdx+9BJwP7VgNJnwh0t/0gb9aO9+67fuKypz69KAV6MDJqLIZI9yA/+OdcvgD/YAXiYhAJWsv/tg56Kw/7QdwISiX88aO8KPuRTsc8fOgsUldCodNu38O9DOkVCnz/2nYDEOnSRz/yzyeuzHYCrAvAAC3pWTWEPs9bUGmAk/23pf+9JNS06QPa5DrBB2d6YuaCNf+Sb24MC2LhMW/r3J5PGr9eDWV/xZxCHMRqL/4e0eKWjtQI8PulEYFLG7T4Z6gOYNZx35X+N7FU7be2861cAvB8pTyevWjfFxauTqUHlww/iy6s/E5y9Gm8f5AH7Vx04vpZ/zDAe1JXX7gB43yhevtrXamhP3YgPf8/4zx3g8WLHgdce/g9mwPb+nlDRFOo/76bR+2YI5XjQ6sOfj1dbR3pwdqOzKP9KqP2DWqNYHyt2gKweI+sBVg6A9lw71Hivh4f6uecN8lhx+D8UBbuNA+CHqqXCeD7mT9Z/i+Uzwp+ue5uW+Khv1MRL9XywA3msVQHy8GdH2QzZ2AHQnqGda9LP91Fj0TArDX+BL7piG0+i0cK2lPlrGdYF9msN/4cY++W6t4oXlQR4eQq9krPKmb3WsT4nr9liRlpvsVW8NI00957yL4xihTUAyf7cSMnf2MZevP6Tex9NI9nktT4HyFjqGfbLdIfN7cWECgcPlTNWj2SV2V+JzNaV1uEAbeNBqwx/BWNW8v94PNQ1wH41tsEQ/h3pci0KgNptgyH8tdOltw7Qwf8jhvCXsH+sywE69SyG8DfxJR8doFvPMgh/U/n3zGzZY+UOgMYMf7R/rMwBygGdW9Y1vBlQRWzL8Ex5wrsucw1oeNHyj5Itbs/54rkD4L1qYPXW+Ot6GdeAECrN47M3pVPh0GfSd7Lhtp47QPZgR8YPzzhKi2jh2mnWvSiknnwTmFJ/ZjvPmWrns/rvWM6F4RmHf8zoIt9iHu974RkvTqDGD4569eLvmwFVwDZDPLMPrcP/LBurcKXdwz+rxe2ss4vH6t8+KOPwxzsxMOiD0pUe/lktO2vxf/bz3SC8P3eMKTM3ltBC83dZ7mHh/zs/+K96Xa1kEwuW89IBEO/dZHD1X+bh3+pN5/qTv7Hw/N4D/s/UkxtXOJ/xZl/cVX+UWw/fDYqbETQ+Tp/JLJp78DahTWaMOdlXOO8Ae0I4IwD53Q6T1NDEjnenAot4ZWP+zGncztSh0Z7VygermudYSBH0iJnz/HPBQYy0QyR8SLQ8zt45QMZEPxeydqPBOzn46w3zxY/9mbea2+eBEKvyjJWqAWGOfg/UTJj6MyNiFaC8GYd/pe1K+jlfOjNHcT5voh2XIcXciM6Ce3g19WcTNCcBBYzjEu/FJhqwHCPxJch1/hXIOG/2ZDCKcG2F+Vf14rOO/NeqycLlWSBu4b+Jjl3rfxwv/nZd9JurP9q3t5apPIXxNYet1DIi3B5HflSBqDv8szH9SXImf0yGNUbkkTu3d1oYgnlRlpnkkr0votlipp23CU0s1tTDi8cMf1V47zoKRA/4Fz1a/L/v6o/GDH9VLYE8qZszTY/2xZ+1an/z4q8z/JVTidgPzdTl368qsDnzc5W2dtm4y6FirT327vJ/lZZM7dDsS1ye1OybUZ25bdVzZBn+V+XS1tyO38HNiMmoZXqjG5+FFzqd/K+K0K+es1D/DdviWbO2R2cPcmZ2buKiXKo79ZiKl7Iu7WgRkLExLy5WcZiHP9Miv2l3p1jsgZv1v2ifdv55SXO1CIjLXlZdVGSAvWX4k1HTpupN1hdcjcV2zvJPh1YPsk3T0jN9Xen/DhYBJFavDWHsCC2m/qRJjkvaXpc77VivcbIEiNUqqatp7hUBxWl6JpFJ8m8x9ScJRd1eZ2fEHZ07Dxhfr0b8bxD/+uvVrSIgr/2u12srXVeb4g/v2pvskRPRvFfXTgPhaxUq9VrfdYsafWU1pMxFf1aNqrjZBGCmaJKsfXPJTHj9zlH+z9dGMq/C6X+FPZj4d6qsiXcKjhjyUmQV/oom67XXn3aCQ2bO8V/FBg2SAt38F0FGXln5gCuqhvdkJHz8k6ds1B9ljHWYJqtw7h05urKvz9fYOf6pklNGe4d1pRJQ7e+GV6OMjqRhnX3Kpptl9ufbax5qNBhTI9VwqgSoRkeHVzt3v1vvBUM4kQMyrlPMmIiXImuf4tqjfq+lJ2nTgHslQF3bCujnvyqKWCzv1vFOSGOMAJSjwtaNtgiAlp6gq7CrSyUA2omSpsl/VTmwdondkLJW2Jz5Idm/pUVsKEs1sJv8G8V/XdqySJcdSdpNv13YxV1OpTubENvYrYN/2bEXzAGdgVrSj8Z2Km1BwaO4onv8l2dbOCyXA+Ie9U+tRDcex6Myd+zUp01GlZKcclNH6beq/bpLCpMmpXac4V8tm9hS2JbKAfEUtV9PTjERcXx1qlaSZyd2/Mej1VnT0m+X/LubNVOU1NkMUPn4jV/N+Bd23i1GP+mC0CGr0/5M8ads09DNRTu5kwF2itFhfd8p9xX2jxegv+oHsS7vkNg+Mm7UOMPajK+8nRyaA+wkBnUJrPiXFWDW9FYWaZT921UajV3yJ+3SAQ4K/7oEtIixGXAVFEA7gFMSH6KA3OYrA3GjXzfpwYBIQ+mVbVBo0+L7w0ITN4fOAu0YGssu2vAvNDGTvuH02t6JqiN2rhh3tmvzFRKxPYfeBxD6Zsg/H3Zk2c1F/00I0BsjQzfLEz+yrHD2sSood1e+PZfeB8A3boSarpnWL2827HKLZ6D/druxnWDvynvL5I8yOqyRwj9XlNuNN5NT7wRnN2q1my7/O2ofxuas8ac+eZHeWJLkflhPReIdS5a42s0nK3Oxq1ufBUqp1TT5RztqfrrhrH+7TSpxeZDSAzPH5xwZWevKtRmFMK6drVPdRPs49nHg+FZBs7ot+b+x7DMGq1lJJ6a/IUnlApaBusmYgRF9acaV2dK2YxopHzj3hRCUpbtdFiOz+GcrAH47oQRQ+qmv0WOSe8sTP0T9ryxVzbh2eFB8XZmS5eb1Tyw28d+JdEL6b7wE8PFlq9NlWSE3RzAgaHfz2GZZ/vlnJ/JyQv+13e9s6W/UX+kEuwGjifk06bkAtPCfoundHGW9smNNP+6WtUFFu9T0boX8N4VkA+QN/bz6K7x7jAp7JHdylX+Fo49Z6uJ0Ovo33a61GyjYaxKALv4VZsRz0m/tbnG3+g91Y3ybMjBmRhf/GzTVRCDWmHZYG7Un+adofJs5cBIozrLMQjDTbttnkyQ7LfptbdqT/HfDB+CiAGSWolkY6yitTStI+P8I2Q5lFf1Ms9VCNmUP0DBLcI2z3c9GEk2+1aUFgHH61NRaMv2ckbIbN9LjUBOSwp83YP0M+cue/kpbjmKfycN0DKZi4QDH5QUgZcIoHRItEv+FBIjRNMCIuFKco3DMY23IodGPd7eb1Di9HXejzNWQ7MBLCwCTqI8mSTqWFPIoi2TGGXGQBOAm4SjoIRqNhujgUW6ceO5YcZqxRhuz4SE1yfFYrmWvUkP+hSWTHV58DbZWZ9LH4029DKE/kwsKpuFbikezNt/2cXEB2B2PtC9H/f7ESh4UF4+WXpZa0U999NjKvz395WiOzIjEpuPxrd1uspnnf2KHsKYn6/FfDlnw+dg4Ovk21PwPqNDiXatTVcNCk1l78ZOAqAn++hE24f/I3TL1mNmXlLshQ3HmDnU7Ckctnxgg0Thtov9IlaBpeodHtzZjjqXfBUhrUuruaCoAvh0VWpy1qh4nF8djasgOv7ck0YPoR9mR4ZtJAKOrP7E21/+lBSBmHL96FOkYLSJuw6ItmWHhpQZJgNLP7S0eeUiBlgnhLh4iQ+NaW+z/0p8D2PGG7aCR5X935IOxp5jh/b54rJUEytTP+CYrn+NEf5n8mfHfmjRVbdJR+UGNsxFzLP1BoIxPpcUdMvEajfivJUCI4dQo+DsUIBt0XunIJkCaBMkfu5HzcyoGm5a1Jz0FYMRjyzhu/ftl8nFineDvQzSEfpQp8tjNzBTGCcDc2jNUgCx2eqohITXWDNQfmT0YFKAo62k9Gzs40dHG2lNXgCKwzU79io71d9EM/mM6SJ/76E/xDNG2+BRwZ0ykksrck5GFwbMBwT+QoDjqSS0TMJMdLaw9uwD0X91aZbqoXy1V+0lWRrFe8A+U5z76J8nMqsBBzglAbKNjOvyrMweyCv5oavqn4EUrABYXgNRGx3TPZaTdNZBu8A9UZ7ybP/m3VMGLfxdoZ85kbM+/qgimWouz43GGyq9fZKKJojKz1M2pBeBEl2LtTX2Y26XeMTY4oHrnOvhPPcvg6Kzo7zpANoutK2vHywvAqXHH4mHvmwB5HjsNSWSq8MMk+E8TV34blPYdJpsqJrFw3JMLCUAWgFiHQDFqTGKmKITkqDs2XegIzmgo/Vl9oNZDpJO9LVMWgIIALJ4ACjZPR3o7aQhAXDPG3lKLSODXE9OFtnVwaq7pJ0dUrFE8tal5ay/+ZWAk+WTcz54UNZHhUTOZfjHUFfSnQ8nJmK4rvS3Kpg41bqDLvweQ2+TEGV6Dy+h0koTZWMfS8ljNehTbFNcRpDkrek47f1IcIkNTW5oZcHHnwNUgIsH8p1jXY5pdTrGF8JxOR+3ldIoGcxNXI+04zKT0i5FWCefyXwXEDZdVEPQJQMySX+1ystGxWIx3pr0TLwin4dpf0E98iR6Gd7F0WjLik6xyRweuBpLWUkjtHvcVsnQHuou5jmGixgRHtj16O40U/GX0N/JPXIBFiqcONMVRHfguOBJy8CnScJgjlwROpjpWs3+UJYChh2zGYCaOxMwvHH5y+vPC+XSSDuvC5aBiIRD6nFJ6fQ4j48VpdNLHCMHPRL8oOPQok5+Lw5F81FPkwgUhU0M2I1k89a2H4rSFAjU9Y8Qlpf/YduBohksXR6qDO3E5MNEaaW8laygZzCmYVM00l/SPDC8jBEgW9WvMZj7+LQNnzgzQ8wlNeRh6eQxnJsI/UvAjjYNmaCn+3bgYkBTRhglDR8ewIvR72B8jOFB2coJ+p/nfREbxjI3HYU5+rsl4JvrTWYowNf+OXA8WmWUAmcxoXPJHCn49+uepwbDay93gXy4BkOEUsM2I2Gy2N2rwb3DqDP3KabMjE0BVSKdG+UKZAFAe+Bbcjxb8WvRHc1Xgmdv8F5RemLU7o5fOzL08EsOe4f5ishbso/Ho7znYbPSX/Cs64M71wEWqcI9cXJQvRzhmqc//cTFwgRHZ39ATTR3Hm49+hcXKv925HDSquGq61vdiwZRZmkas3F/q5SS0O0vs1yf9Lh3HnjX6NyhV0u8Q/0WFynUv6skAonF52i+8v2vRPx77hH6V0ZeI/mr6p3BHly4HHwudS3v1bMxlTPbZ6G893pz0l7blQ8M9/jfZJcepWbPuDFCPhtmlvtXP85vmFfKab8ZkP5/2X+hQTk2vuG0az2xawTblenLsJwG5zl0uceeIGGr5pe35tmVc9vPC/9J3/LnpR9FFbSHHfg4k4oLmdEEar1UENKcG3E2xx8js59ovHUC+pfNOvHCktoRr/BekEkUu1y5iThfBW0SCTy33rPBfomxUG6AsUh6Kv5+Z/jKzKq3g3M8BlQ5AfCBH12svgxGNG/q19vdibvpRW68i934PLmLI13CAEycXosIzbZ0uF+51he5nYw8/jpiek36JXZid/qL6Z/vTdCpCm42rCkB46i4Yecvytm9cgL+vdX90FkrtvzTzEs7azROz09+Ev+gCLvK/iQQqOz3bUvezePyR62n//PTzqsT3ZbNx3wEuRi9eIOnXVnaVftTeMUd/D1jkFHWfNzbjfhr7E+3vQza/4raH/8XVHwMUe4x7Z7c61GfxZLGnqf3RAvR3WcfZX4NNDTvaE30F91NaXlP7owXs3aH+Lk7/2DMWZkpVfOZDHmHOfB7200adrvansQOG5DqENitygIoLhHFcAWM0y/g0g3+Byq8vNzr9W8Di1C5ys5u6wb9E5ddTl0Ru/xg8Kvp4YFYX1YoEf9nD9mWRyq+hX9k7N8/+sCg77nK5ijNqX/cqP0L/oa1/7v8UfHThHdex8xVx07+e6F+WfnX/HJd/UgUeuAhzSLIa8y4hnFQAAAQ9SURBVDYhpt4uUvlV/TuQvsk9S5H7/G+wGGGuiBau6r4DZ+ID11nyeBlDxxHjnlKf/Aj/Jgc0MebEPKCq+g+0NhU2glssUPyVHWy6JHbq4En41+cCD5ypl5eAOBUKEyn2+R4f5j75U3dQXY1UqyfhXwzmUHb8UNyVj6LF2T9UvblUPSL9ap65cP8kvZ/LB/LgP1Bz1avYKW/Cv5wIipG1oATg0rh9Jb+wUCeY4GMnEvuFf/ZMSg4On/pX5oADH1mHC16Yfeul8AE0MfuCICmWbOMX8EGMpyXOXg1nn/rANO9HEvYv3b08eKX+jAQQlONLF2Of7YoeLtKa+8D4H0TKLgc+56tvnqk/lQChiDnM+hW6tGG/L74uCpUQ1rqhcZ0gjg7SsRT3UbzxEqkcUfFs7F/YQ/eFf05qXYO3SsCBUZGxPpaGL+KxuMOQo2YbT4G5GrDCDB6Aava5wO0qrusCL3cBXhMEf7hwvjTCh5RQdBCOxatRNYQMbbxFKhhwhiwQk0hm8v6lqwJgp/lxJHWYc4eL1FyUpvafWIpF41wkBfCafioBvP2zyUNfor+9qhPtW7mAwmMuDP3cPeMIMS6ACujHh3Sspir0nf5CVRW19UQVbdwk8Qt/vLb4V7/XF0fdUwODCUXU8621Q5uTkdzvO/2Mk/N2GzsN4CzVmNUJ7MRdpbksGormLj3ZpcwwqNMBLq0djNZAf/HRMHVsxCNGfqrHOG9d3Dc7M2uw41DtPEYHrcrEb8RtIxzjmt1xFnXy1BK4qc5lqCNtLenxjdTYAVYS/KqTAeM5Oa7O85hD+7BxehgHsVlwRPFmVUCRrRC3NVhcMdaSCzOnQ+P4gIkERCnerA0o6kzGsVHY23Nfnu4z73wWDfcA3fwYpfFmjUA9Nuz/oj/KmR9C/aC8itPLQAfAOh5wWSn7Oh7QnFJrvg5WfEms+JZYcc3YwSE49BMd8bA+dLgeStdW9auDKDosh3Fqao1TDeYpoFa3GG/WjsU8YNzrRto5QbQBUKmbmf0JXNncCWKgX/m2wMTCP2FWNZuHpsD97Glgho/xVlNSneoWAfWzpoGJLiDWMUHtlIMMeGenU1OLQJotU1BXFzbJsnzSWvzUSTXMKFqqO59ZCURgbS/yQOa/7gOcKgUmvoIcYIpaIB0t8EH2fc0EtB485ovZRvMtJIDjMmD+TutxrE/kA1xzgqMG8RX1oPmrcwLhVMqR0Xn+U/dgqzUXBeVnPurzKDnKh1kGvAMAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMBz/Af/NQI4rRGDgAAAAABJRU5ErkJggg==")
+            assert(type(iconBytes) == "string" and #iconBytes == 9505, "Minimized icon decode failed")
+            writefile("LootForge_Minimized_Planet.txt", iconBytes)
+            assert(readfile("LootForge_Minimized_Planet.txt") == iconBytes, "Minimized icon file mismatch")
+            minimizedIconPath = "LootForge_Minimized_Planet.txt"
+        end)
+        if not ok then report("Minimized icon: " .. tostring(err)) end
+    end
+
     Window = Non:CreateWindow({
         Title = "RealOrCake +1 loot to forge",
         Folder = "RealOrCakeHub",
+        Icon = minimizedIconPath,
         Theme = "Cosmos",
         Size = { 630, 480 },
         OpenButton = { Title = "Open", Draggable = true }
@@ -1382,8 +1399,8 @@ local function main()
                     say("AutoFarm Tower", "Entering Dungeon...", "play")
                     pcall(function()
                         local remotes = ReplicatedStorage:FindFirstChild("Remote")
-                        if remotes and remotes:FindFirstChild("Dungeon") then
-                            local dun = remotes.Dungeon
+                        local dun = remotes and (remotes:FindFirstChild("Dungeon_Server") or remotes:FindFirstChild("Dungeon"))
+                        if dun then
                             if dun:FindFirstChild("TryClaimDailyDunTicRE") then
                                 dun.TryClaimDailyDunTicRE:FireServer()
                             end
@@ -1406,9 +1423,6 @@ local function main()
 
                 if STATE.Running and STATE.TowerFarm and lp:GetAttribute("IntoFight") == "Dungeon" then
                     local _, hrp = getHRPPosition()
-                    if hrp and hrp.Anchored then
-                        pcall(function() hrp.Anchored = false end)
-                    end
                     teleportTo(dungeonArenaPos)
                     task.wait(0.3)
 
@@ -1496,10 +1510,20 @@ local function main()
             end
             applyBarrierBypass()
 
-            if (STATE.AutoFarm or STATE.InstaKill) and not STATE.Zone27Loop and not STATE.TowerFarm then
-                killStageEnemies()
-            end
+            task.wait(0.35)
+        end
+    end)
 
+    task.spawn(function()
+        local lastErrorNotice = -math.huge
+        while alive and STATE.Running do
+            if STATE.AutoFarm or STATE.InstaKill or STATE.Zone27Loop or STATE.TowerFarm then
+                local ok, err = pcall(killStageEnemies)
+                if not ok and clock() - lastErrorNotice >= 5 then
+                    lastErrorNotice = clock()
+                    report("Insta-kill retry: " .. tostring(err))
+                end
+            end
             task.wait(0.35)
         end
     end)
@@ -1510,5 +1534,5 @@ end
 local ok, err = pcall(main)
 if not ok then
     cleanup()
-    report("No se pudo iniciar: " .. tostring(err))
+    report("Startup failed: " .. tostring(err))
 end
