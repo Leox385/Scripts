@@ -8,19 +8,40 @@ if type(_G.__Retro95Cleanup) == "function" then
     pcall(_G.__Retro95Cleanup)
 end
 
+-- Retro95 UI loader: local file first, then GitHub
+local RETRO95_URL = "https://raw.githubusercontent.com/Leox385/Retro95-UI/main/Retro95.lua"
+
 local uiCode = nil
-if type(readfile) == "function" then
+if type(isfile) == "function" and type(readfile) == "function" and isfile("Retro95.lua") then
     local ok, content = pcall(readfile, "Retro95.lua")
     if ok and type(content) == "string" and #content > 1000 then
         uiCode = content
     end
 end
+if not uiCode then
+    local ok, content = pcall(function()
+        if type(httpget) == "function" then return httpget(RETRO95_URL) end
+        return game:HttpGet(RETRO95_URL)
+    end)
+    if ok and type(content) == "string" and #content > 1000 and content:sub(1, 1) ~= "<" then
+        uiCode = content
+    end
+end
+if not uiCode then
+    warn("[RealOrCake] Could not load Retro95 UI (no local file and the download failed): " .. RETRO95_URL)
+    return
+end
 
-assert(type(uiCode) == "string" and #uiCode > 100, "Failed to load Retro95 UI library from Retro95.lua")
 loadstring(uiCode)()
 
 local RetroUI = _G.Retro95
-assert(RetroUI, "Failed to initialize Retro95 UI")
+if not RetroUI then
+    warn("[RealOrCake] Retro95 UI did not initialize. Check the red errors above in the console.")
+    return
+end
+
+-- Placeholder: this function was called but never defined in the original script
+local function landBikeSafely() end
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -850,8 +871,8 @@ end)
 _G.__HalloweenSuiteCleanup = function()
     State.alive = false
     State.masterAutoFarm = false
-      landBikeSafely()
-      pcall(function() espConnection:Disconnect() end)
+    pcall(landBikeSafely)
+    pcall(function() espConnection:Disconnect() end)
     for i = 1, POOL_SIZE do
         local slot = espPool[i]
         if slot then
