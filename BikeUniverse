@@ -1,0 +1,866 @@
+if type(_G.__HalloweenSuiteCleanup) == "function" then
+    pcall(_G.__HalloweenSuiteCleanup)
+end
+if type(_G.__AstraCleanup) == "function" then
+    pcall(_G.__AstraCleanup)
+end
+if type(_G.__Retro95Cleanup) == "function" then
+    pcall(_G.__Retro95Cleanup)
+end
+
+local uiCode = nil
+if type(readfile) == "function" then
+    local ok, content = pcall(readfile, "Retro95.lua")
+    if ok and type(content) == "string" and #content > 1000 then
+        uiCode = content
+    end
+end
+
+assert(type(uiCode) == "string" and #uiCode > 100, "Failed to load Retro95 UI library from Retro95.lua")
+loadstring(uiCode)()
+
+local RetroUI = _G.Retro95
+assert(RetroUI, "Failed to initialize Retro95 UI")
+
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+
+local HalloweenRemotes = ReplicatedStorage:FindFirstChild("HalloweenRemotes")
+local PumpkinsRemote = HalloweenRemotes and HalloweenRemotes:FindFirstChild("Pumpkins")
+local ShopRemote = HalloweenRemotes and HalloweenRemotes:FindFirstChild("Shop")
+
+local ChallengeRemotes = ReplicatedStorage:FindFirstChild("HalloweenChallengeRemotes")
+local ChallengeReportRemote = ChallengeRemotes and ChallengeRemotes:FindFirstChild("Report")
+
+local SpawnBikeEvent = ReplicatedStorage:FindFirstChild("SpawnBikeEvent")
+local TownBreakProp = ReplicatedStorage:FindFirstChild("TownBreakProp")
+
+local State = {
+    alive = true,
+    masterAutoFarm = false,
+    freezeBike = false,
+    afkStuntFarm = false,
+    stuntPitchDeg = 28,
+    stuntHeight = 3.5,
+    smashDelayMs = 1600,
+    autoChallengePulse = false,
+    autoTownSmash = false,
+    espEnabled = false,
+    espBoxes = false,
+    espTracers = false,
+    espNames = false,
+    espMaxDist = 5000,
+    espColor = Color3.fromRGB(255, 135, 25),
+    selectedShopItem = "SpookyWrap (250)",
+    startPumpkins = LocalPlayer:GetAttribute("Pumpkins") or 0,
+    currentPumpkins = LocalPlayer:GetAttribute("Pumpkins") or 0,
+    smashedCount = 0,
+}
+
+local ShopItemMap = {
+    ["SpookyWrap (250)"] = { id = "SpookyWrap", cost = 250 },
+    ["HellWrap (1,000)"] = { id = "HellWrap", cost = 1000 },
+    ["GhostWrap (2,500)"] = { id = "GhostWrap", cost = 2500 },
+    ["HauntedUltra Bike (6,000)"] = { id = "HauntedUltra", cost = 6000 },
+    ["HellRider Bike (9,999)"] = { id = "HellRider", cost = 9999 },
+}
+
+pcall(function()
+    setgc({ MIN_SPEED = 6, HIT_RADIUS = 4.5 })
+end)
+
+local cachedBikeModel = nil
+local cachedChassis = nil
+local function getPlayerBikeChassis()
+    if cachedBikeModel and cachedBikeModel.Parent == workspace and cachedChassis and cachedChassis.Parent == cachedBikeModel then
+        local seat = cachedBikeModel:FindFirstChild("DriverSeat")
+        return cachedChassis, cachedBikeModel, seat
+    end
+    cachedBikeModel = nil
+    cachedChassis = nil
+    local lpName = LocalPlayer.Name
+    for _, child in ipairs(workspace:GetChildren()) do
+        if child.ClassName == "Model" and child ~= LocalPlayer.Character and string.find(child.Name, lpName, 1, true) then
+            local ch = child:FindFirstChild("Chassis")
+            local seat = child:FindFirstChild("DriverSeat")
+            if ch and (ch.ClassName == "Part" or ch.ClassName == "MeshPart") then
+                cachedBikeModel = child
+                cachedChassis = ch
+                return ch, child, seat
+            end
+        end
+    end
+    return nil, nil, nil
+end
+
+local smashedHistory = {}
+local function cleanSmashedHistory()
+    local now = tick()
+    for k, expire in pairs(smashedHistory) do
+        if now > expire then
+            smashedHistory[k] = nil
+        end
+    end
+end
+
+local function getAvailablePumpkins()
+    cleanSmashedHistory()
+    local folder = workspace:FindFirstChild("MyPumpkins")
+    if not folder then return {} end
+    local chassis = getPlayerBikeChassis()
+    local origin = (chassis and chassis.Position) or (LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character.HumanoidRootPart.Position) or Vector3.new(0, 0, 0)
+    local now = tick()
+    local list = {}
+    for _, item in ipairs(folder:GetChildren()) do
+        if item.Parent == folder and (not smashedHistory[item] or now > smashedHistory[item]) then
+            local body = item:FindFirstChild("Body")
+            if body and (body.ClassName == "MeshPart" or body.ClassName == "Part") and body.Position then
+                local transp = body.Transparency
+                if transp < 0.6 then
+                    local pPos = body.Position
+                    local posKey = string.format("%d_%d_%d", math.floor(pPos.X / 5), math.floor(pPos.Y / 5), math.floor(pPos.Z / 5))
+                    if not smashedHistory[posKey] or now > smashedHistory[posKey] then
+                        local dist = (pPos - origin).Magnitude
+                        table.insert(list, { model = item, body = body, dist = dist, pos = pPos, posKey = posKey })
+                    end
+                end
+            end
+        end
+    end
+    table.sort(list, function(a, b) return a.dist < b.dist end)
+    return list
+end
+
+local function safeWorldToScreen(pos)
+    if type(WorldToScreen) == "function" then
+        local ok, sp, onScreen = pcall(WorldToScreen, pos)
+        if ok and sp then return sp, onScreen == true end
+    end
+    local cam = workspace.CurrentCamera
+    if cam and type(cam.WorldToViewportPoint) == "function" then
+        local ok, sp, onScreen = pcall(function() return cam:WorldToViewportPoint(pos) end)
+        if ok and sp then return Vector2.new(sp.X, sp.Y), onScreen and (sp.Z > 0) end
+    end
+    return Vector2.new(0, 0), false
+end
+
+local POOL_SIZE = 24
+local espPool = {}
+for i = 1, POOL_SIZE do
+    local box = Drawing.new("Square")
+    box.Visible = false
+    box.Color = State.espColor
+    box.Thickness = 1.5
+    box.Filled = false
+
+    local line = Drawing.new("Line")
+    line.Visible = false
+    line.Color = State.espColor
+    line.Thickness = 1.0
+
+    local tag = Drawing.new("Text")
+    tag.Visible = false
+    tag.Color = Color3.fromRGB(255, 255, 255)
+    tag.Size = 13
+    tag.Center = true
+    tag.Outline = true
+
+    espPool[i] = { box = box, line = line, tag = tag }
+end
+
+local espConnection = nil
+local lastEspUpdate = 0
+espConnection = RunService.RenderStepped:Connect(function()
+    if not State.alive then return end
+    local now = tick()
+    if now - lastEspUpdate < 0.05 then return end
+    lastEspUpdate = now
+
+    if not State.espEnabled then
+        for i = 1, POOL_SIZE do
+            local s = espPool[i]
+            s.box.Visible = false
+            s.line.Visible = false
+            s.tag.Visible = false
+        end
+        return
+    end
+
+    local cam = workspace.CurrentCamera
+    local camPos = (cam and cam.CFrame and cam.CFrame.Position) or Vector3.new(0, 0, 0)
+    local screenW, screenH = 1920, 1080
+    if cam and cam.ViewportSize then
+        screenW = cam.ViewportSize.X
+        screenH = cam.ViewportSize.Y
+    end
+    local tracerOrigin = Vector2.new(screenW / 2, screenH)
+
+    local folder = workspace:FindFirstChild("MyPumpkins")
+    local candidates = {}
+    if folder then
+        for _, p in ipairs(folder:GetChildren()) do
+            local body = p:FindFirstChild("Body")
+            if body and body.Parent and body.Position then
+                local d = (body.Position - camPos).Magnitude
+                if d <= State.espMaxDist then
+                    table.insert(candidates, { body = body, dist = d })
+                end
+            end
+        end
+        table.sort(candidates, function(a, b) return a.dist < b.dist end)
+    end
+
+    for i = 1, POOL_SIZE do
+        local slot = espPool[i]
+        local data = candidates[i]
+        if data and data.body and data.body.Parent and data.body.Position then
+            local pos, onScreen = safeWorldToScreen(data.body.Position)
+            if onScreen then
+                local dist = data.dist
+                local sz = math.clamp(1400 / math.max(dist, 10), 12, 60)
+
+                if State.espBoxes then
+                    slot.box.Position = Vector2.new(pos.X - sz / 2, pos.Y - sz / 2)
+                    slot.box.Size = Vector2.new(sz, sz)
+                    slot.box.Color = State.espColor
+                    slot.box.Visible = true
+                else
+                    slot.box.Visible = false
+                end
+
+                if State.espTracers then
+                    slot.line.From = tracerOrigin
+                    slot.line.To = pos
+                    slot.line.Color = State.espColor
+                    slot.line.Visible = true
+                else
+                    slot.line.Visible = false
+                end
+
+                if State.espNames then
+                    slot.tag.Position = Vector2.new(pos.X, pos.Y - sz / 2 - 14)
+                    slot.tag.Text = string.format("Pumpkin [%dm]", math.floor(dist))
+                    slot.tag.Color = Color3.fromRGB(255, 230, 160)
+                    slot.tag.Visible = true
+                else
+                    slot.tag.Visible = false
+                end
+            else
+                slot.box.Visible = false
+                slot.line.Visible = false
+                slot.tag.Visible = false
+            end
+        else
+            slot.box.Visible = false
+            slot.line.Visible = false
+            slot.tag.Visible = false
+        end
+    end
+end)
+
+local Window = RetroUI:CreateWindow({
+    Title = "RealOrCake | Bike universe",
+    Theme = "Windows 98",
+    Size = { 640, 480 },
+    ToggleKey = "F8",
+    Status = "Ready | Bike Universe",
+})
+
+local Watermark = Window:Watermark({
+    Title = "RealOrCake | Pumpkins: " .. tostring(State.currentPumpkins)
+})
+
+local performRagdollRecovery
+local isRecovering = false
+
+performRagdollRecovery = function()
+    if isRecovering then return end
+    isRecovering = true
+
+    local chassis, bike, seat = getPlayerBikeChassis()
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+    local ragdollEvent = ReplicatedStorage:FindFirstChild("RagdollEvent")
+    if ragdollEvent then
+        pcall(function() ragdollEvent:FireServer(false) end)
+    end
+
+    if char then
+        for _, d in ipairs(char:GetDescendants()) do
+            if (d.Name == "RagdollCollider" or string.find(d.Name, "Ragdoll", 1, true)) and (d.ClassName == "Part" or d.ClassName == "MeshPart") then
+                pcall(function() d.CanCollide = false end)
+            end
+        end
+    end
+
+    if bike and hrp and seat then
+        local pa = chassis and chassis:FindFirstChild("PromptAttachment")
+        local prompt = pa and pa:FindFirstChild("RidePrompt")
+
+        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        hrp.Position = seat.Position
+
+        if prompt then
+            pcall(function() fireproximityprompt(prompt) end)
+        end
+
+        pcall(function()
+            keypress(0x45)
+            task.wait(0.06)
+            keyrelease(0x45)
+        end)
+
+        task.wait(0.2)
+        if not seat:FindFirstChild("SeatWeld") and prompt then
+            hrp.Position = seat.Position
+            pcall(function() fireproximityprompt(prompt) end)
+        end
+    end
+
+    task.wait(0.2)
+    isRecovering = false
+end
+
+local MainMenu = Window:Section("RealOrCake")
+local FarmTab = MainMenu:Tab("Farm")
+local ChallengeTab = MainMenu:Tab("Challenges")
+local EspTab = MainMenu:Tab({ Title = "ESP", Columns = 2 })
+local ShopTab = MainMenu:Tab("Shop")
+local ConfigTab = MainMenu:Tab("Themes")
+
+local GoalBar = FarmTab:Progressbar({
+    Title = string.format("Pumpkins: %d (+0) | HellRider Goal", State.currentPumpkins),
+    Default = math.clamp(State.currentPumpkins / 9999, 0, 1),
+})
+
+local MasterFarmToggle = FarmTab:Toggle({
+    Title = "Master Auto-Farm (All-in-One)",
+    Default = false,
+    Flag = "master_auto_farm",
+    Callback = function(val)
+        State.masterAutoFarm = val
+        if RetroUI and RetroUI.Flags then RetroUI.Flags["master_auto_farm"] = val end
+        Window:SetStatus(val and "Master Auto-Farm Active" or "Auto-Farm Paused")
+        RetroUI:Notify({
+            Title = "Master Auto-Farm",
+            Content = val and "All-in-One Auto-Farm engaged! Safe driving active." or "Master Auto-Farm stopped.",
+            Type = val and "success" or "info",
+            Duration = 3
+        })
+    end
+})
+_G.__RetroFarmToggle = MasterFarmToggle
+
+FarmTab:Keybind({
+    Title = "Auto-Farm Keybind",
+    Default = "F6",
+    Mode = "toggle",
+    Flag = "auto_farm_key",
+    OnTriggered = function()
+        MasterFarmToggle:Set(not State.masterAutoFarm)
+    end
+})
+
+FarmTab:Slider({
+    Title = "Farm Verification Delay (ms)",
+    Min = 800,
+    Max = 3500,
+    Default = 1600,
+    Suffix = " ms",
+    Flag = "smash_delay",
+    Callback = function(val) State.smashDelayMs = val end
+})
+
+FarmTab:Button({
+    Title = "Smash Closest Pumpkin Now",
+    Style = "primary",
+    Callback = function()
+        task.spawn(function()
+            local list = getAvailablePumpkins()
+            if #list == 0 then
+                RetroUI:Notify({ Title = "Farm", Content = "No pumpkins found in MyPumpkins folder.", Type = "warning", Duration = 3 })
+                return
+            end
+            local target = list[1]
+            local chassis, bike, seat = getPlayerBikeChassis()
+            if not chassis then
+                RetroUI:Notify({ Title = "Farm", Content = "No bike found. Spawn your bike first.", Type = "error", Duration = 3 })
+                return
+            end
+            local char = LocalPlayer.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            local pPos = target.pos
+            local forward = (pPos - chassis.Position).Unit
+            local look = Vector3.new(forward.X, 0, forward.Z)
+            if look.Magnitude < 0.1 then look = Vector3.new(0, 0, 1) end
+
+            smashedHistory[target.model] = tick() + 35
+            smashedHistory[target.posKey] = tick() + 35
+
+            target.body.CanCollide = false
+            local cf = CFrame.lookAt(pPos - forward * 7.5, pPos, Vector3.new(0, 1, 0))
+            chassis.CFrame = cf
+            if hrp then
+                hrp.CFrame = cf * CFrame.new(0, 2.5, 0)
+                hrp.AssemblyLinearVelocity = forward * 18
+            end
+            chassis.AssemblyLinearVelocity = forward * 18
+            if PumpkinsRemote then
+                PumpkinsRemote:FireServer(target.model)
+            end
+            RetroUI:Notify({ Title = "Manual Smash", Content = "Drove into pumpkin. Server syncing...", Type = "success", Duration = 2 })
+        end)
+    end
+})
+
+FarmTab:Button({
+    Title = "Force Remount Bike (Press E)",
+    Callback = function()
+        performRagdollRecovery()
+        RetroUI:Notify({ Title = "Recovery", Content = "Reseated player onto bike.", Type = "info", Duration = 2 })
+    end
+})
+
+FarmTab:Button({
+    Title = "Recover Bike (Upright & Unstuck)",
+    Callback = function()
+        local chassis = getPlayerBikeChassis()
+        if chassis then
+            local pos = chassis.Position
+            local look = chassis.CFrame.LookVector
+            local lookXZ = Vector3.new(look.X, 0, look.Z)
+            if lookXZ.Magnitude < 0.1 then lookXZ = Vector3.new(1, 0, 0) end
+            chassis.CFrame = CFrame.lookAt(pos + Vector3.new(0, 3, 0), pos + lookXZ * 5 + Vector3.new(0, 3, 0), Vector3.new(0, 1, 0))
+            chassis.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+            RetroUI:Notify({ Title = "Recovery", Content = "Bike uprighted & zeroed.", Type = "info", Duration = 2 })
+        end
+    end
+})
+
+FarmTab:Button({
+    Title = "Spawn Selected Garage Bike",
+    Callback = function()
+        if SpawnBikeEvent then
+            local garage = LocalPlayer:FindFirstChild("Garage")
+            local sel = garage and garage:FindFirstChild("Selected")
+            local bikeName = (sel and sel.Value) or "KLM 350CC"
+            SpawnBikeEvent:FireServer(bikeName)
+            RetroUI:Notify({ Title = "Bike Spawn", Content = "Spawned: " .. tostring(bikeName), Type = "info", Duration = 3 })
+        end
+    end
+})
+
+ChallengeTab:Button({
+    Title = "Claim / Complete Trick Challenges (1x)",
+    Style = "primary",
+    Callback = function()
+        task.spawn(function()
+            if not ChallengeReportRemote then
+                RetroUI:Notify({ Title = "Challenges", Content = "ChallengeReport remote not found.", Type = "error", Duration = 3 })
+                return
+            end
+            local before = LocalPlayer:GetAttribute("Pumpkins") or 0
+            ChallengeReportRemote:FireServer("trick", 3, 4, "PERFECT", true)
+            ChallengeReportRemote:FireServer("near")
+            ChallengeReportRemote:FireServer("line", 50000)
+            task.wait(1.0)
+            local after = LocalPlayer:GetAttribute("Pumpkins") or 0
+            local gained = after - before
+            if gained > 0 then
+                RetroUI:Notify({
+                    Title = "Challenges Completed",
+                    Content = string.format("Claimed +%d pumpkins from challenges!", gained),
+                    Type = "success",
+                    Duration = 4
+                })
+            else
+                RetroUI:Notify({
+                    Title = "Challenges",
+                    Content = "Challenge reports sent (daily limit reached if +0).",
+                    Type = "info",
+                    Duration = 3
+                })
+            end
+        end)
+    end
+})
+
+ChallengeTab:Toggle({
+    Title = "Auto-Pulse Challenge Reports",
+    Default = false,
+    Flag = "auto_challenge_pulse",
+    Callback = function(val) State.autoChallengePulse = val end
+})
+
+ChallengeTab:Toggle({
+    Title = "Auto-Smash Nearby Town Props",
+    Default = false,
+    Flag = "auto_town_smash",
+    Callback = function(val) State.autoTownSmash = val end
+})
+
+EspTab:Toggle({
+    Title = "Enable Pumpkin ESP",
+    Default = false,
+    Flag = "esp_master",
+    Callback = function(val) State.espEnabled = val end
+})
+
+EspTab:Toggle({
+    Title = "ESP 2D Bounding Boxes",
+    Default = false,
+    Flag = "esp_boxes",
+    Callback = function(val) State.espBoxes = val end
+})
+
+EspTab:Toggle({
+    Title = "ESP Tracers (Bottom-Screen)",
+    Default = false,
+    Flag = "esp_tracers",
+    Callback = function(val) State.espTracers = val end
+})
+
+EspTab:Toggle({
+    Title = "ESP Distance Labels",
+    Default = false,
+    Flag = "esp_names",
+    Callback = function(val) State.espNames = val end
+})
+
+EspTab:Colorpicker({
+    Title = "ESP Render Color",
+    Default = State.espColor,
+    Flag = "esp_color",
+    Callback = function(c) State.espColor = c end
+})
+
+EspTab:Slider({
+    Title = "Max Distance Filter",
+    Min = 500,
+    Max = 10000,
+    Default = 5000,
+    Suffix = " m",
+    Flag = "esp_max_dist",
+    Callback = function(val) State.espMaxDist = val end
+})
+
+ShopTab:Dropdown({
+    Title = "Select Event Reward",
+    Options = {
+        "SpookyWrap (250)",
+        "HellWrap (1,000)",
+        "GhostWrap (2,500)",
+        "HauntedUltra Bike (6,000)",
+        "HellRider Bike (9,999)",
+    },
+    Default = "SpookyWrap (250)",
+    Flag = "shop_selected",
+    Callback = function(val) State.selectedShopItem = val end
+})
+
+ShopTab:Button({
+    Title = "Purchase Selected Reward",
+    Style = "primary",
+    Callback = function()
+        local item = ShopItemMap[State.selectedShopItem]
+        if not item then return end
+        local balance = LocalPlayer:GetAttribute("Pumpkins") or 0
+        if balance < item.cost then
+            RetroUI:Notify({
+                Title = "Insufficient Pumpkins",
+                Content = string.format("Need %d pumpkins, but you only have %d.", item.cost, balance),
+                Type = "error",
+                Duration = 4
+            })
+            return
+        end
+        if ShopRemote then
+            ShopRemote:FireServer(item.id)
+            RetroUI:Notify({
+                Title = "Purchase Sent",
+                Content = string.format("Sent purchase request for %s!", item.id),
+                Type = "success",
+                Duration = 4
+            })
+        end
+    end
+})
+
+local TeleportLocations = {
+    ["Halloween Portal / Event Hub"] = Vector3.new(-235, 3, 716),
+    ["High-Density Pumpkin Loop"] = Vector3.new(-413, 3, 361),
+    ["Desert Highway Stretch"] = Vector3.new(1250, 4, -890),
+    ["Airport Runway"] = Vector3.new(-1800, 3, 450),
+}
+
+for name, pos in pairs(TeleportLocations) do
+    ShopTab:Button({
+        Title = "Teleport to " .. name,
+        Callback = function()
+            local chassis, bike = getPlayerBikeChassis()
+            local char = LocalPlayer.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            if chassis then
+                local newPos = pos + Vector3.new(0, 3, 0)
+                chassis.CFrame = CFrame.lookAt(newPos, newPos + Vector3.new(1, 0, 0), Vector3.new(0, 1, 0))
+                if hrp then hrp.Position = newPos + Vector3.new(0, 2, 0) end
+                chassis.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                RetroUI:Notify({ Title = "Teleport", Content = "Teleported bike to " .. name, Type = "info", Duration = 2 })
+            end
+        end
+    })
+end
+
+ConfigTab:Dropdown({
+    Title = "UI Theme",
+    Options = RetroUI:GetThemes(),
+    Default = "Windows 98",
+    Callback = function(name)
+        RetroUI:SetTheme(name)
+    end
+})
+
+ConfigTab:Button({
+    Title = "Reset All Features (OFF)",
+    Callback = function()
+        if _G.__RetroFarmToggle then _G.__RetroFarmToggle:Set(false) end
+        State.masterAutoFarm = false
+        State.freezeBike = false
+        State.autoChallengePulse = false
+        State.autoTownSmash = false
+        State.espEnabled = false
+        landBikeSafely()
+        RetroUI:Notify({ Title = "Reset", Content = "All features turned OFF.", Type = "warning", Duration = 3 })
+    end
+})
+
+ConfigTab:Button({
+    Title = "About RealOrCake Suite",
+    Callback = function()
+        RetroUI:Notify({
+            Title = "RealOrCake | Bike universe",
+            Content = "All-in-One Master Suite\nEngine: Physics-Drive Server Sync\nRuntime: Matcha LuauVM",
+            Type = "info",
+            Duration = 5
+        })
+    end
+})
+
+task.spawn(function()
+    local lastPumpkins = State.currentPumpkins
+    while State.alive do
+        pcall(function()
+            local curr = LocalPlayer:GetAttribute("Pumpkins") or 0
+            if curr ~= lastPumpkins then
+                State.currentPumpkins = curr
+                lastPumpkins = curr
+                local delta = curr - State.startPumpkins
+                GoalBar:Set(math.clamp(curr / 9999, 0, 1))
+                GoalBar:SetTitle(string.format("Pumpkins: %d (+%d) | HellRider Goal", curr, delta))
+                Watermark:SetTitle("RealOrCake | Pumpkins: " .. tostring(curr))
+                Window:SetStatus(string.format("Pumpkins: %d (+%d) | %s", curr, delta, State.masterAutoFarm and "Farm Active" or "Idle"))
+            end
+        end)
+        task.wait(1.0)
+    end
+end)
+
+task.spawn(function()
+    while State.alive do
+        if State.autoChallengePulse and ChallengeReportRemote then
+            pcall(function()
+                ChallengeReportRemote:FireServer("trick", 3, 4, "PERFECT", true)
+                ChallengeReportRemote:FireServer("near")
+                ChallengeReportRemote:FireServer("line", 50000)
+            end)
+        end
+        task.wait(3.5)
+    end
+end)
+
+task.spawn(function()
+    while State.alive do
+        if State.autoTownSmash and TownBreakProp then
+            pcall(function()
+                local townProps = workspace:FindFirstChild("TownProps")
+                local chassis = getPlayerBikeChassis()
+                if townProps and chassis then
+                    for _, p in ipairs(townProps:GetChildren()) do
+                        if p:IsA("BasePart") and (p.Position - chassis.Position).Magnitude < 40 then
+                            TownBreakProp:FireServer(p)
+                        end
+                    end
+                end
+            end)
+        end
+        task.wait(0.5)
+    end
+end)
+
+task.spawn(function()
+    local stuckCounter = 0
+    local lastPos = Vector3.new(0, 0, 0)
+    local trafficScanTimer = 0
+
+    while State.alive do
+        local isFarming = State.masterAutoFarm or (RetroUI and RetroUI.Flags and RetroUI.Flags["master_auto_farm"] == true)
+        if not isFarming then
+            stuckCounter = 0
+            task.wait(0.2)
+        else
+            local chassis, bike, seat = getPlayerBikeChassis()
+            local char = LocalPlayer.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+
+            trafficScanTimer = trafficScanTimer + 0.1
+            if trafficScanTimer >= 0.4 then
+                trafficScanTimer = 0
+                pcall(function()
+                    local traffic = workspace:FindFirstChild("Traffic")
+                    local myPos = chassis and chassis.Position
+                    if traffic then
+                        for _, car in ipairs(traffic:GetChildren()) do
+                            if car:IsA("Model") then
+                                local carPos = nil
+                                for _, part in ipairs(car:GetDescendants()) do
+                                    if part:IsA("BasePart") then
+                                        if part.CanCollide then part.CanCollide = false end
+                                        if not carPos and part.Position then carPos = part.Position end
+                                    end
+                                end
+                                if myPos and carPos and (carPos - myPos).Magnitude < 25 then
+                                    for _, part in ipairs(car:GetDescendants()) do
+                                        if part:IsA("BasePart") then
+                                            part.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end)
+            end
+
+            if char then
+                for _, d in ipairs(char:GetDescendants()) do
+                    if (d.Name == "RagdollCollider" or string.find(d.Name, "Ragdoll", 1, true)) and d:IsA("BasePart") and d.CanCollide then
+                        pcall(function() d.CanCollide = false end)
+                    end
+                end
+            end
+
+            local isMounted = (seat and seat:FindFirstChild("SeatWeld") ~= nil)
+                or (seat and hrp and (hrp.Position - seat.Position).Magnitude < 15)
+
+            if not isMounted or not chassis or not seat then
+                if seat and hrp then
+                    performRagdollRecovery()
+                    task.wait(0.3)
+                elseif SpawnBikeEvent then
+                    local garage = LocalPlayer:FindFirstChild("Garage")
+                    local sel = garage and garage:FindFirstChild("Selected")
+                    local bName = (sel and sel.Value) or "KLM 350CC"
+                    SpawnBikeEvent:FireServer(bName)
+                    task.wait(1.5)
+                else
+                    task.wait(0.4)
+                end
+            else
+                local pumpkins = getAvailablePumpkins()
+                if #pumpkins == 0 then
+                    cleanSmashedHistory()
+                    task.wait(0.4)
+                else
+                    local target = pumpkins[1]
+                    local tModel = target.model
+                    local pPos = target.pos
+
+                    smashedHistory[tModel] = tick() + 35
+                    smashedHistory[target.posKey] = tick() + 35
+
+                    local currentPos = chassis.Position
+                    if (currentPos - lastPos).Magnitude < 1.0 then
+                        stuckCounter = stuckCounter + 1
+                    else
+                        stuckCounter = 0
+                    end
+                    lastPos = currentPos
+
+                    if stuckCounter >= 2 then
+                        stuckCounter = 0
+                        local forwardLook = chassis.CFrame.LookVector
+                        chassis.Position = chassis.Position + Vector3.new(0, 4.2, 0) + forwardLook * 3
+                        if hrp then hrp.Position = chassis.Position + Vector3.new(0, 2.5, 0) end
+                        chassis.AssemblyLinearVelocity = forwardLook * 25 + Vector3.new(0, 8, 0)
+                        task.wait(0.2)
+                    end
+
+                    if target.body then
+                        pcall(function() target.body.CanCollide = false end)
+                    end
+
+                    local forward = (pPos - chassis.Position).Unit
+                    local lookXZ = Vector3.new(forward.X, 0, forward.Z)
+                    if lookXZ.Magnitude < 0.1 then lookXZ = Vector3.new(0, 0, 1) end
+
+                    local bikeCF = CFrame.lookAt(pPos - forward * 7.5, pPos, Vector3.new(0, 1, 0))
+                    chassis.CFrame = bikeCF
+                    if hrp then
+                        hrp.CFrame = bikeCF * CFrame.new(0, 2.5, 0)
+                        hrp.AssemblyLinearVelocity = forward * 18
+                    end
+                    chassis.AssemblyLinearVelocity = forward * 18
+
+                    if PumpkinsRemote and tModel and tModel.Parent then
+                        pcall(function() PumpkinsRemote:FireServer(tModel) end)
+                    end
+
+                    if chassis then
+                        local up = chassis.CFrame.UpVector
+                        if up.Y < 0.35 then
+                            local pos = chassis.Position
+                            chassis.CFrame = CFrame.lookAt(pos + Vector3.new(0, 1.2, 0), pos + lookXZ * 5, Vector3.new(0, 1, 0))
+                            chassis.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+                        end
+                    end
+
+                    local waitSec = math.clamp(State.smashDelayMs / 1000, 0.8, 3.5)
+                    local startWait = tick()
+                    while (tick() - startWait) < waitSec do
+                        local stillFarming = State.masterAutoFarm or (RetroUI and RetroUI.Flags and RetroUI.Flags["master_auto_farm"] == true)
+                        if not stillFarming or not State.alive then break end
+                        if tModel and not tModel.Parent then
+                            break
+                        end
+                        task.wait(0.08)
+                    end
+
+                    State.smashedCount = State.smashedCount + 1
+                    task.wait(0.08)
+                end
+            end
+        end
+    end
+end)
+
+_G.__HalloweenSuiteCleanup = function()
+    State.alive = false
+    State.masterAutoFarm = false
+      landBikeSafely()
+      pcall(function() espConnection:Disconnect() end)
+    for i = 1, POOL_SIZE do
+        local slot = espPool[i]
+        if slot then
+            pcall(function() slot.box:Remove() end)
+            pcall(function() slot.line:Remove() end)
+            pcall(function() slot.tag:Remove() end)
+        end
+    end
+    pcall(function() RetroUI:Destroy() end)
+end
+
+print(string.format("[RealOrCake | Bike universe - Retro95] Master Suite loaded! All-in-One ready. Pumpkins: %d", State.currentPumpkins))
